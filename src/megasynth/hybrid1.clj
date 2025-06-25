@@ -1,5 +1,62 @@
-(ns megasynth.claude4-v14
+(ns megasynth.hybrid1
   (:require [overtone.live :as o]))
+
+;; =============================================================================
+;; MISC
+;; =============================================================================
+
+(defn call-stack
+  "Returns a vector of the closest `n` stack frames as maps containing class, method, file, and line."
+  [drop-n take-n]
+  (let [stack (.getStackTrace (Thread/currentThread))]
+    (->> stack
+         (drop drop-n)
+         (take take-n)
+         (map (fn [^StackTraceElement el]
+                {:class (.getClassName el)
+                 :method (.getMethodName el)
+                 :file (.getFileName el)
+                 :line (.getLineNumber el)}))
+         vec)))
+
+(declare get-device-bus)
+(declare device-buses)
+
+(defn ->print-str [& x]
+  (with-out-str
+    (apply clojure.pprint/pprint x)))
+
+(defn cap-out [bus signals]
+  (let [r (o/out bus signals)
+        lines (mapv :line (call-stack 5 2))]
+    (println (apply format "==> OUT
+ return: %s bus: %s signals: %s lines: %s
+-----
+"
+                    (map ->print-str [r bus signals lines])))
+    r))
+
+
+
+(defn synth-destroyed? [s]
+  (-> s .status deref (= :destroyed)))
+
+(defn monitor-device! [device-id output-index]
+  (let [bus (get-device-bus device-id :audio output-index)]
+    (o/defsynth tap-monitor [in-bus 0]
+      (cap-out 0 (* 0.5 (o/in in-bus))))
+    (tap-monitor :in-bus (.id bus))
+    (println (str "Tapping output from " device-id " output[" output-index "]"))))
+
+
+
+(defn set-device-control-bus! [device-id ctrl-index value]
+  (let [bus (get-in @device-buses [device-id :control ctrl-index])]
+    (if bus
+      (do (o/control-bus-set! bus value)
+          (println (str "Set control bus " ctrl-index " of " device-id " to " value)))
+      (println "No control bus at that index."))))
+
 
 ;; =============================================================================
 ;; GLOBAL STATE - DEFINED FIRST
@@ -8,7 +65,7 @@
 (defonce patch-matrix (atom {}))
 (defonce device-registry (atom {}))
 (defonce knob-registry (atom {}))
-(defonce bus-registry (atom {}))
+#_(defonce bus-registry (atom {}))
 (defonce synth-node (atom nil))
 (defonce device-synths (atom {}))
 (defonce device-buses (atom {}))
@@ -18,27 +75,32 @@
 ;; BUS MANAGEMENT
 ;; =============================================================================
 
-(defn create-control-bus!
-  "Create a control rate bus for CV signals"
-  [bus-id]
-  (let [bus (o/control-bus)]
-    (swap! bus-registry assoc bus-id bus)
-    (o/control-bus-set! bus 0)
-    bus))
+(comment
+  ;; Claude garbage
+  
+  (defn create-control-bus!
+    "Create a control rate bus for CV signals"
+    [bus-id]
+    (let [bus (o/control-bus)]
+      (swap! bus-registry assoc bus-id bus)
+      (o/control-bus-set! bus 0)
+      bus))
 
-(defn create-audio-bus!
-  "Create an audio rate bus for audio signals"
-  [bus-id]
-  (let [bus (o/audio-bus)]
-    (swap! bus-registry assoc bus-id bus)
-    bus))
+  (defn create-audio-bus!
+    "Create an audio rate bus for audio signals"
+    [bus-id]
+    (let [bus (o/audio-bus)]
+      (swap! bus-registry assoc bus-id bus)
+      bus))
 
-(defn get-bus [bus-id]
-  (get @bus-registry bus-id))
+  (defn get-bus [bus-id]
+    (get @bus-registry bus-id))
 
-(defn set-bus-value! [bus-id value]
-  (when-let [bus (get-bus bus-id)]
-    (o/control-bus-set! bus value)))
+  (defn set-bus-value! [bus-id value]
+    (when-let [bus (get-bus bus-id)]
+      (o/control-bus-set! bus value)))
+
+  (comment))
 
 ;; =============================================================================
 ;; KNOB SYSTEM (0.0 - 1.0 normalized values)
@@ -61,7 +123,7 @@
               :or {min-val 0 max-val 1 curve :linear}}]
   (let [knob (->Knob knob-id 0.5 min-val max-val curve)]
     (swap! knob-registry assoc knob-id knob)
-    (create-control-bus! (keyword (str "knob-" (name knob-id))))
+    #_(create-control-bus! (keyword (str "knob-" (name knob-id))))
     knob))
 
 (defn get-knob [knob-id]
@@ -78,7 +140,7 @@
   [device-id device-type inputs outputs & {:keys [controls] :or {controls {}}}]
   (let [device (->Device device-id device-type inputs outputs controls true)]
     (swap! device-registry assoc device-id device)
-    (doseq [output-id outputs]
+    #_(doseq [output-id outputs]
       (let [bus-id (keyword (str (name device-id) "-" (name output-id)))]
         (if (= output-id :audio-out)
           (create-audio-bus! bus-id)
@@ -120,7 +182,7 @@
                                    (o/sin-osc freq2)])
         
         mixed (* amplitude (+ osc1 (* 0.5 osc2)))]
-    (o/out out-bus mixed)))
+    (cap-out out-bus mixed)))
 
 (o/defsynth lfo-device
   [out-bus 0
@@ -138,8 +200,9 @@
                                       (o/lf-saw frequency)
                                       (o/lf-pulse frequency 0.5)])
         scaled-sig (+ offset (* amplitude lfo-sig))]
-    (o/out out-bus scaled-sig)))
+    (cap-out out-bus scaled-sig)))
 
+#_
 (o/defsynth filter-device
   [in-bus 0
    out-bus 0
@@ -152,12 +215,34 @@
         cutoff (o/in:kr cutoff-bus)
         resonance (o/in:kr res-bus)
         drive (o/in:kr drive-bus)
-        
         driven-sig (* drive input-sig)
         filtered (o/select:ar filter-type [(o/moog-ff driven-sig cutoff resonance)
                                           (o/hpf driven-sig cutoff)
                                           (o/bpf driven-sig cutoff resonance)])]
-    (o/out out-bus filtered)))
+    (cap-out out-bus filtered)))
+
+#_(o/defsynth filter-device
+  [in-bus 0
+   out-bus 0
+   cutoff-bus 21]
+  (let [sig (o/in in-bus)
+        cutoff (o/in:kr cutoff-bus)
+        filtered (o/rlpf sig cutoff 0.5)]
+    (cap-out out-bus filtered)))
+
+#_(o/defsynth filter-device
+  [in-bus 0
+   out-bus 0]
+  (let [sig (o/in in-bus)
+        filtered (o/rlpf sig 0 0.5)] ; fixed cutoff
+    (cap-out out-bus filtered)))
+
+(o/defsynth filter-device
+  [in-bus 0
+   out-bus 0]
+  (let [sig (o/in in-bus)
+        filtered 0.0]
+    (cap-out out-bus sig)))
 
 (o/defsynth mixer-device
   [in-bus-1 0
@@ -173,7 +258,7 @@
         master (o/in:kr master-bus)
         
         mixed (* master (+ (* level1 sig1) (* level2 sig2)))]
-    (o/out out-bus mixed)))
+    (cap-out out-bus mixed)))
 
 (o/defsynth delay-device
   [in-bus 0
@@ -188,7 +273,7 @@
         
         delayed (o/comb-c input-sig 2 delay-time feedback)
         mixed (+ (* (- 1 mix) input-sig) (* mix delayed))]
-    (o/out out-bus mixed)))
+    (cap-out out-bus mixed)))
 
 (o/defsynth reverb-device
   [in-bus 0
@@ -203,7 +288,7 @@
         
         reverbed (o/free-verb input-sig room-size damping)
         mixed (+ (* (- 1 mix) input-sig) (* mix reverbed))]
-    (o/out out-bus mixed)))
+    (cap-out out-bus mixed)))
 
 (o/defsynth output-device
   [in-bus 0
@@ -214,11 +299,11 @@
         pan (o/in:kr pan-bus)
         
         output-sig (* input-sig level)]
-    (o/out 0 (o/pan2 output-sig pan))))
+    (cap-out 0 (o/pan2 output-sig pan))))
 
 ;; Audio router for connecting devices
 (o/defsynth audio-router [in-bus 0 out-bus 0]
-  (o/out out-bus (o/in in-bus)))
+  (cap-out out-bus (o/in in-bus)))
 
 ;; =============================================================================
 ;; DEVICE MANAGEMENT
@@ -227,7 +312,7 @@
 (defn allocate-device-buses!
   "Allocate control and audio buses for a device"
   [device-id device-type]
-  (let [control-buses (repeatedly 10 o/control-bus)
+  (let [control-buses (vec (repeatedly 10 o/control-bus))
         audio-buses (case device-type
                       :audio-osc [(o/audio-bus)]
                       :lfo [(o/control-bus)]
@@ -262,54 +347,54 @@
           ;; NOTE: This bus parameter passing may be incorrect
           (case device-type
             :audio-osc (audio-oscillator-device 
-                       :out-bus (.id (first audio-buses))
-                       :amp-bus (.id (nth control-buses 0))
-                       :freq-bus (.id (nth control-buses 1))
-                       :wave-bus (.id (nth control-buses 2))
-                       :detune-bus (.id (nth control-buses 3))
-                       :osc2-offset-bus (.id (nth control-buses 4)))
+                        :out-bus (.id (first audio-buses))
+                        :amp-bus (.id (nth control-buses 0))
+                        :freq-bus (.id (nth control-buses 1))
+                        :wave-bus (.id (nth control-buses 2))
+                        :detune-bus (.id (nth control-buses 3))
+                        :osc2-offset-bus (.id (nth control-buses 4)))
             
             :lfo (lfo-device
-                 :out-bus (.id (first audio-buses))
-                 :freq-bus (.id (nth control-buses 0))
-                 :amp-bus (.id (nth control-buses 1))
-                 :wave-bus (.id (nth control-buses 2))
-                 :offset-bus (.id (nth control-buses 3)))
+                  :out-bus (.id (first audio-buses))
+                  :freq-bus (.id (nth control-buses 0))
+                  :amp-bus (.id (nth control-buses 1))
+                  :wave-bus (.id (nth control-buses 2))
+                  :offset-bus (.id (nth control-buses 3)))
             
             :filter (filter-device
-                    :in-bus (.id (first audio-buses))
-                    :out-bus (.id (second audio-buses))
-                    :type-bus (.id (nth control-buses 0))
-                    :cutoff-bus (.id (nth control-buses 1))
-                    :res-bus (.id (nth control-buses 2))
-                    :drive-bus (.id (nth control-buses 3)))
+                     :in-bus (.id (first audio-buses))
+                     :out-bus (.id (second audio-buses))
+                     :type-bus (.id (nth control-buses 0))
+                     :cutoff-bus (.id (nth control-buses 1))
+                     :res-bus (.id (nth control-buses 2))
+                     :drive-bus (.id (nth control-buses 3)))
             
             :mixer (mixer-device
-                   :in-bus-1 (.id (first audio-buses))
-                   :in-bus-2 (.id (second audio-buses))
-                   :out-bus (.id (nth audio-buses 2))
-                   :level1-bus (.id (nth control-buses 0))
-                   :level2-bus (.id (nth control-buses 1))
-                   :master-bus (.id (nth control-buses 2)))
+                    :in-bus-1 (.id (first audio-buses))
+                    :in-bus-2 (.id (second audio-buses))
+                    :out-bus (.id (nth audio-buses 2))
+                    :level1-bus (.id (nth control-buses 0))
+                    :level2-bus (.id (nth control-buses 1))
+                    :master-bus (.id (nth control-buses 2)))
             
             :delay (delay-device
-                   :in-bus (.id (first audio-buses))
-                   :out-bus (.id (second audio-buses))
-                   :time-bus (.id (nth control-buses 0))
-                   :feedback-bus (.id (nth control-buses 1))
-                   :mix-bus (.id (nth control-buses 2)))
-            
-            :reverb (reverb-device
                     :in-bus (.id (first audio-buses))
                     :out-bus (.id (second audio-buses))
-                    :room-bus (.id (nth control-buses 0))
-                    :damp-bus (.id (nth control-buses 1))
+                    :time-bus (.id (nth control-buses 0))
+                    :feedback-bus (.id (nth control-buses 1))
                     :mix-bus (.id (nth control-buses 2)))
             
+            :reverb (reverb-device
+                     :in-bus (.id (first audio-buses))
+                     :out-bus (.id (second audio-buses))
+                     :room-bus (.id (nth control-buses 0))
+                     :damp-bus (.id (nth control-buses 1))
+                     :mix-bus (.id (nth control-buses 2)))
+            
             :output (output-device
-                    :in-bus (.id (first audio-buses))
-                    :level-bus (.id (nth control-buses 0))
-                    :pan-bus (.id (nth control-buses 1))))]
+                     :in-bus (.id (first audio-buses))
+                     :level-bus (.id (nth control-buses 0))
+                     :pan-bus (.id (nth control-buses 1))))]
       
       (swap! device-synths assoc device-id synth-instance)
       (println (str "Started device " device-id " (" device-type ")"))
@@ -319,8 +404,14 @@
   "Stop a device synth and free its buses"
   [device-id]
   (when-let [synth-instance (get @device-synths device-id)]
-    (when-not (.destroyed? synth-instance)
-      (o/kill synth-instance))
+    (try
+      (when-not (synth-destroyed? synth-instance)
+        (o/kill synth-instance))
+      (catch Throwable e
+        (def synth-instance0 synth-instance)
+        (println "===> EXCEPTION: stop-device!; synth-instance")
+        (clojure.pprint/pprint synth-instance)
+        (clojure.pprint/pprint e)))
     (swap! device-synths dissoc device-id)
     (println (str "Stopped device " device-id))))
 
@@ -342,18 +433,19 @@
   [source-device-id source-output-index dest-device-id dest-input-index]
   (let [source-bus (get-device-bus source-device-id :audio source-output-index)
         dest-bus (get-device-bus dest-device-id :audio dest-input-index)]
-    (when (and source-bus dest-bus)
+    (if (and source-bus dest-bus)
       (let [router (audio-router :in-bus (.id source-bus) :out-bus (.id dest-bus))]
         (swap! connection-matrix assoc [source-device-id source-output-index dest-device-id dest-input-index] router)
         (println (str "Connected " source-device-id "[" source-output-index "] → " 
-                     dest-device-id "[" dest-input-index "]"))))))
+                      dest-device-id "[" dest-input-index "]")))
+      (println (str "==> FAIL: connect-audio! " [source-device-id source-output-index dest-device-id dest-input-index])))))
 
 (defn disconnect-audio!
   "Disconnect an audio routing"
   [source-device-id source-output-index dest-device-id dest-input-index]
   (let [connection-key [source-device-id source-output-index dest-device-id dest-input-index]]
     (when-let [router-synth (get @connection-matrix connection-key)]
-      (when-not (.destroyed? router-synth)
+      (when-not (synth-destroyed? router-synth)
         (o/kill router-synth))
       (swap! connection-matrix dissoc connection-key)
       (println (str "Disconnected " source-device-id "[" source-output-index "] ↛ " 
@@ -523,7 +615,7 @@
         ;; Final output
         final-out (* reverbed master-vol)]
     
-    (o/out 0 [final-out final-out])))
+    (cap-out 0 [final-out final-out])))
 
 (defn start-simple-patch! 
   "Start the simple working synth system"
@@ -552,7 +644,7 @@
 ;; =============================================================================
 
 (defn demo-modular-patch!
-  "Demonstrate a complete modular patch: Osc → Filter → Output - HAS ISSUES"
+  "Demonstrate a complete modular patch: Osc → Filter → Output"
   []
   (println "Creating modular patch: Oscillator → Filter → Output")
   
@@ -562,6 +654,7 @@
   
   (connect-audio! :osc1 0 :filter1 0)
   (connect-audio! :filter1 1 :main-out 0)
+  #_(connect-audio! :osc1 0 :main-out 0)
   
   (create-knob! :osc-freq :min-val 220 :max-val 880)
   (create-knob! :osc-amp :min-val 0 :max-val 1)
@@ -585,7 +678,7 @@
   (println "(set-knob! :osc-freq 0.8)")
   (println "(set-knob! :filter-cutoff 0.2)")
   (println "(set-knob! :filter-res 0.7)")
-  (println "\nNOTE: This modular routing has issues. Try demo-simple-patch! instead."))
+  #_(println "\nNOTE: This modular routing has issues. Try demo-simple-patch! instead."))
 
 (defn demo-simple-patch!
   "Demonstrate the working simple synth system"
@@ -715,10 +808,20 @@
   "Stop all running devices and clear the patch"
   []
   (doseq [[device-id _] @device-synths]
-    (stop-device! device-id))
+    (try
+      (stop-device! device-id)
+      (catch Throwable e
+          (println "==> EXCEPTION: stop-all-devices!; device-synths")
+          (clojure.pprint/pprint device-id)
+          (clojure.pprint/pprint e))))
   (doseq [[_ router-synth] @connection-matrix]
-    (when-not (.destroyed? router-synth)
-      (o/kill router-synth)))
+    (try
+      (when-not (synth-destroyed? router-synth)
+        (o/kill router-synth))
+      (catch Throwable e
+          (println "==> EXCEPTION: stop-all-devices!; router-synth")
+          (clojure.pprint/pprint router-synth)
+          (clojure.pprint/pprint e))))
   (reset! device-registry {})
   (reset! device-synths {})
   (reset! device-buses {})
@@ -732,7 +835,7 @@
   []
   (stop-all-devices!)
   (stop-simple-patch!)
-  (reset! bus-registry {})
+  #_(reset! bus-registry {})
   (println "Patch matrix completely reset!"))
 
 ;; =============================================================================
@@ -782,7 +885,7 @@
     ;; Monitor it directly to speakers
     (let [out-bus (first (get-in result [:buses :audio]))]
       (o/defsynth test-monitor [in-bus 0]
-        (o/out 0 (* 0.3 (o/in in-bus))))
+        (cap-out 0 (* 0.3 (o/in in-bus))))
       
       (test-monitor :in-bus (.id out-bus))
       (println "Test oscillator should be audible!")
@@ -810,29 +913,119 @@
   ;; =============================================================================
   
   ;; WORKING APPROACH: Use the simple synth system
-  (demo-simple-patch!)  ; This works reliably
+  (demo-simple-patch!)                  ; This works reliably
   (set-knob! :simple-osc-freq 0.8)
   (set-knob! :simple-lfo-depth 0.6)
   (set-knob! :simple-filter-cutoff 0.3)
   (stop-simple-patch!)
   
   ;; PROBLEMATIC APPROACH: Modular routing (has issues)
-  (demo-modular-patch!)  ; Creates devices but audio chain doesn't work
-  (set-knob! :osc-freq 0.8)  ; Parameter setting works but no sound
+  (demo-modular-patch!) ; Creates devices but audio chain doesn't work
+
+  (let [out-bus (get-device-bus :main-out :audio 0)]
+    (o/defsynth monitor-output [in-bus 0]
+      (cap-out 0 (* 0.5 (o/in in-bus))))
+    (monitor-output :in-bus (.id out-bus)))
+
+  (monitor-device! :filter1 1)
+
   (show-patch-status)
+  (clojure.pprint/pprint @device-buses)
+  
   (stop-all-devices!)
+
+  
+  (set-knob! :osc-freq 0.8)
+  (set-knob! :osc-freq 0.2)
+  (set-knob! :osc-freq 0.8)
+  (set-device-param! :filter1 1 200)
+  (set-device-param! :filter1 1 2000)  
+  (set-device-param! :filter1 3 1.0)    ; max drive
+  (set-device-param! :filter1 3 0.1)
+
+  (set-device-param! :filter1 2 300)
+  (set-device-param! :filter1 3 500)
+  (set-device-param! :filter1 4 0.1)  
+  (set-device-param! :filter1 5 1.0)
+
+  (set-knob! :filter-cutoff 0.0)
+  (set-knob! :filter-cutoff 1.0)
+  (set-knob! :filter-res 0.7)
+
+  (set-device-control-bus! :filter1 0 300)
+  (set-device-control-bus! :filter1 0 2000)
+  
+  (set-device-control-bus! :filter1 1 500) ; cutoff
+  (set-device-control-bus! :filter1 2 500) ; resonance
+  (set-device-control-bus! :filter1 3 1.0) ; drive
+  (set-device-control-bus! :filter1 4 500) ; cutoff
+  (set-device-control-bus! :filter1 5 0.7) ; resonance
+  (set-device-control-bus! :filter1 5 1.0) ; drive
+
+  
+  (show-patch-status)
+  (clojure.pprint/pprint @device-buses)
+  
+  (stop-all-devices!)
+
+  (o/defsynth passthrough [in-bus 0]
+    (let [sig (o/in in-bus)]
+      (o/out 0 sig)))
+
+  (let [output-pan-bus (o/control-bus)
+        output-level-bus (o/control-bus)
+        output-in-bus (o/audio-bus)
+
+        osc1-out-bus (o/audio-bus)
+        osc1-amp-bus (o/control-bus)
+        osc1-freq-bus (o/control-bus)
+        osc1-wave-bus (o/control-bus)
+        osc1-detune-bus (o/control-bus)
+        osc1-osc2-offset-bus (o/control-bus)
+        osc1-portamento (o/control-bus)
+        _ (do (o/control-bus-set! osc1-amp-bus 1.0)
+              (o/control-bus-set! osc1-freq-bus 440)
+              (o/control-bus-set! osc1-wave-bus 0.0)
+              (o/control-bus-set! osc1-detune-bus 0.0)
+              (o/control-bus-set! osc1-osc2-offset-bus 0.0)
+              (o/control-bus-set! osc1-portamento 0.1))
+        osc1 (audio-oscillator-device 
+              :out-bus (.id osc1-out-bus)
+              :amp-bus (.id osc1-amp-bus)
+              :freq-bus (.id osc1-freq-bus)
+              :wave-bus (.id osc1-wave-bus)
+              :detune-bus (.id osc1-detune-bus)
+              :osc2-offset-bus (.id osc1-osc2-offset-bus))
+        
+        _ (do (o/control-bus-set! output-level-bus 1.0)
+              (o/control-bus-set! output-pan-bus 0.5))
+        ar0 (audio-router :in-bus (.id osc1-out-bus)
+                          :out-bus (.id output-in-bus))
+        output (output-device :in-bus (.id output-in-bus)
+                              :level-bus (.id output-level-bus)
+                              :pan-bus (.id output-pan-bus))]
+    
+    output)
+
+  (o/stop)
+
+
+  
   
   ;; DEBUGGING: Test individual components
-  (test-working-oscillator!)  ; Creates a working oscillator for testing
+  (test-working-oscillator!) ; Creates a working oscillator for testing
   
   ;; STATUS CHECKING
   (show-patch-status)
   @device-synths
-  @device-buses
+  (clojure.pprint/pprint @device-buses)
   @connection-matrix
+  (clojure.pprint/pprint @device-buses)
   
   ;; CLEANUP
   (reset-patch-matrix!)
+
+  (o/stop)
   
   ;; FOR HARDWARE INTERFACE DEVELOPMENT:
   ;; The knob system (create-knob!, set-knob!, scale-knob-value) works correctly
@@ -844,4 +1037,4 @@
   ;; 1. Use demo-simple-patch! for working audio synthesis
   ;; 2. Develop hardware interface using the working knob system
   ;; 3. Later investigate and fix the modular routing issues
-)
+  (comment))
