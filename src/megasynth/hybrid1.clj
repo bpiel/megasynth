@@ -996,7 +996,8 @@
               :wave-bus (.id osc1-wave-bus)
               :detune-bus (.id osc1-detune-bus)
               :osc2-offset-bus (.id osc1-osc2-offset-bus))
-        
+        _ (clojure.pprint/pprint osc1)
+        _ (clojure.pprint/pprint (type osc1))
         _ (do (o/control-bus-set! output-level-bus 1.0)
               (o/control-bus-set! output-pan-bus 0.5))
         ar0 (audio-router :in-bus (.id osc1-out-bus)
@@ -1026,15 +1027,5 @@
   (reset-patch-matrix!)
 
   (o/stop)
-  
-  ;; FOR HARDWARE INTERFACE DEVELOPMENT:
-  ;; The knob system (create-knob!, set-knob!, scale-knob-value) works correctly
-  ;; The parameter mapping works correctly
-  ;; Use the simple-modular-synth approach for reliable audio generation
-  ;; Map physical knobs to call set-knob! with 0.0-1.0 values
-  
-  ;; RECOMMENDED DEVELOPMENT PATH:
-  ;; 1. Use demo-simple-patch! for working audio synthesis
-  ;; 2. Develop hardware interface using the working knob system
-  ;; 3. Later investigate and fix the modular routing issues
+    
   (comment))
