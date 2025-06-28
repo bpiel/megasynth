@@ -96,10 +96,14 @@
   true)
 
 (defn midi-handler [{:keys [command note] :as msg}]
+  #_(clojure.pprint/pprint msg)
   (case command
     :note-on (note-on! note)
     :note-off (note-off! note)
     (clojure.pprint/pprint msg)))
+
+#_(midi-handler {:command :note-on :note 60})
+#_(midi-handler {:command :note-off :note 60})
 
 {:patch-name {:dev1 {:k {:type :lfo
                          :inputs {:freq :k1 :amp :k2}}
@@ -257,22 +261,150 @@
   (Thread/sleep 300)
   (da-funk-mono 260))
 
+(o/defsynth final-countdown0
+  [freq 440
+   dur 0.5
+   amp 0.8
+   detune 0.03
+   cutoff 2000
+   res 0.3
+   pan 0.0
+   boost 2.0]
+  (let [env (o/env-gen (o/adsr 0.01 0.1 0.8 0.1) (o/line:kr 1.0 0.0 dur) :action o/FREE)
+        detune-freqs [freq (* freq (- 1 detune)) (* freq (+ 1 detune))]
+        osc (o/mix [(o/saw freq)
+                    (o/saw (* freq (- 1 detune)))
+                    (o/saw (* freq (+ 1 detune)))])
+        #_(apply o/mix (mapv o/saw detune-freqs))
+        filtered (o/rlpf osc cutoff res)
+        sig (-> filtered
+                (* env amp)
+                o/pan2
+                (* boost))]
+    (o/out 0 sig)))
+
+(o/defsynth final-countdown1
+  [freq 440
+   dur 0.4
+   amp 0.8
+   detune 0.02
+   cutoff 3500
+   res 0.2
+   pan 0.0
+   boost 2.5
+   fifth 0.4     ;; blend in a 5th above
+   dist 0.01]    ;; distortion/clipping level
+  (let [env (o/env-gen (o/adsr 0.01 0.05 0.9 0.05) (o/line:kr 1.0 0.0 dur) :action o/FREE)
+        saw1 (o/saw freq)
+        saw2 (o/saw (* freq (- 1 detune)))
+        saw3 (o/saw (* freq (+ detune)))
+        saw5 (o/saw (* freq (Math/pow 2 (/ 7.0 12.0)))) ;; perfect 5th
+        osc (o/mix [(* saw1 0.9)
+                    (* saw2 0.6)
+                    (* saw3 0.6)
+                    (* saw5 fifth)])
+        filtered (o/rlpf osc cutoff res)
+        distorted (-> filtered
+                      (* env amp)
+                      o/pan2
+                      (o/clip2 dist)
+                      (* boost))]
+    (o/out 0 distorted)))
+
+(o/defsynth final-countdown2
+  [freq 440
+   dur 0.5
+   amp 1.0
+   detune 0.015
+   cutoff 4000
+   res 0.2
+   pan 0.0
+   boost 1.5
+   dist-level 0.02]
+  (let [env (o/env-gen (o/adsr 0.01 0.08 0.8 0.05)
+                       (o/line:kr 1.0 0.0 dur)
+                       :action o/FREE)
+        saw1 (o/saw freq)
+        saw2 (o/saw (* freq (- 1 detune)))
+        saw3 (o/saw (* freq (+ detune)))
+        osc (o/mix [saw1 saw2 saw3])
+        filtered (o/rlpf osc cutoff res)
+        sig (-> filtered
+                (* env amp)
+                o/pan2
+                (o/clip2 dist-level)
+                (* boost))]
+    (o/out 0 sig)))
+
+
+(play final-countdown2 440)
+
+(play-final-countdown 64 :dur 0.4 :amp 1.2 :fifth 0.4 :cutoff 3500 :boost 2.5)
+
+
+(o/defsynth kick-drum [amp 0.5]
+  (let [env (o/env-gen (o/perc 0.01 0.3) :action o/FREE)
+        freq-env (o/env-gen (o/envelope [60 30] [0.1]))
+        osc (o/sin-osc freq-env)]
+    (o/out 0 (* osc env amp))))
+
+(o/defsynth final-countdown-claude0 [freq 440 amp 0.4 gate 1 cutoff 3000 res 0.3]
+  (let [env (o/env-gen (o/adsr 0.02 0.3 0.7 0.5) gate :action o/FREE)
+        ; Layer multiple oscillators for richness
+        osc1 (o/saw freq)
+        osc2 (o/saw (* freq 1.01)) ; Slight detune for width
+        osc3 (o/pulse freq 0.3)    ; Add some pulse wave character
+        
+        ; Mix the oscillators
+        mixed (+ (* osc1 0.4) (* osc2 0.3) (* osc3 0.3))
+        
+        ; Filter with envelope modulation
+        filter-env (o/env-gen (o/adsr 0.01 0.4 0.6 0.3) gate)
+        filtered (o/rlpf mixed (+ cutoff (* filter-env 2000)) res)
+        
+        ; Add some bite with distortion
+        distorted (o/tanh (* filtered 2))
+        
+        ; Final output with some stereo width
+        left (* distorted env amp)
+        right (* distorted env amp 0.9)]
+    (o/out 0 [left right])))
+
+(o/defsynth fc-lead-chatgpt0
+  [freq 440
+   amp 0.5
+   gate 1
+   cutoff 2500
+   res 0.25
+   detune 0.01
+   pulse-width 0.15
+   drive 2.0
+   pan 0.0]
+  (let [; Envelopes
+        amp-env (o/env-gen (o/adsr 0.005 0.1 0.85 0.1) gate :action o/FREE)
+        filter-env (o/env-gen (o/adsr 0.005 0.2 0.6 0.1) gate)
+        
+        ; Oscillators
+        saw1 (o/saw freq)
+        saw2 (o/saw (* freq (+ 1 detune)))
+        saw3 (o/pulse freq pulse-width)
+        mixed (o/mix [(* saw1 0.5)
+                      (* saw2 0.3)
+                      (* saw3 0.3)])
+        
+        ; Filter with envelope modulation
+        filt (o/rlpf mixed (+ cutoff (* 2000 filter-env)) res)
+        
+        ; Distortion and panning
+        driven (o/tanh (* filt drive))
+        sig (* driven amp-env amp)]
+    
+    (o/out 0 (o/pan2 sig pan))))
+
+
+(play fc-lead-chatgpt0 440)
 
 (o/kill @*da-funk0-voice)
-
-(definst da-funk [freq 440 dur 1.0 amp 1.0 cutoff 2200 boost 12 dist-level 0.015]
-   (let [env (env-gen (adsr 0.3 0.7 0.5 0.3) (line:kr 1.0 0.0 dur) :action FREE)
-         level (+ (* freq 0.25)
-                  (env-gen (adsr 0.5 0.3 1 0.5) (line:kr 1.0 0.0 (/ dur 2)) :level-scale cutoff))
-         osc (mix [(saw freq)
-                   (saw (* freq 0.7491535384383409))])]
-     (-> osc
-         (bpf level 0.6)
-         (* env amp)
-         pan2
-         (clip2 dist-level)
-         (* boost)
-         distort)))
 
 (test-env-gen3)
 
@@ -371,6 +503,7 @@ o/on-node-destroyed
 
 (def m-out0 (midi/midi-out))
 
+(def m-in0 nil)
 (def m-in0 (midi/midi-in "O"))
 
 
