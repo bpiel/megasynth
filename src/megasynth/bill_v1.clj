@@ -337,6 +337,56 @@
     (o/out 0 sig)))
 
 
+(defn ugen-semitone-ratio [semi]
+  (o/pow 2.0 (o/mul-add semi (/ 1.0 12.0) 0)))
+
+(o/defsynth final-countdown-lead
+  [freq 440
+   amp 0.6
+   detune 0.07
+   pan-spread 0.4
+   pitch-env-amt 0.0 ;; Set to >0 to activate pitch sweep
+   amp-attack 0.01
+   amp-decay 0.1
+   amp-sustain 0.8
+   amp-release 0.2
+   rev-mix 0.3
+   rev-room 0.5
+   gate 1]
+  (let [; Detuned saws
+        f1 (* freq (ugen-semitone-ratio (* -1.0 detune)))
+        f2 (* freq (ugen-semitone-ratio -0.03))
+        f3 (* freq (ugen-semitone-ratio 0.03))
+        f4 (* freq (ugen-semitone-ratio detune))
+        saws [(o/pan2 (o/saw f1) (* -1.0 pan-spread))
+              (o/pan2 (o/saw f2) (* -0.3 pan-spread))
+              (o/pan2 (o/saw f3) (* 0.3 pan-spread))
+              (o/pan2 (o/saw f4) pan-spread)]
+        mixed (apply o/mix saws)
+
+        ; Pitch envelope (optional)
+        pitch-env (o/env-gen (o/adsr 0.0 0.01 0.0 0.01) gate)
+        pitch-mod (ugen-semitone-ratio (* pitch-env pitch-env-amt))
+        pitched (* mixed pitch-mod)
+
+        ; Amp envelope
+        amp-env (o/env-gen (o/adsr amp-attack amp-decay amp-sustain amp-release)
+                           gate :action o/FREE)
+        voiced (* pitched amp-env amp)
+
+        ; Reverb
+        wet (o/free-verb voiced rev-mix rev-room)]
+    (o/out 0 wet)))
+
+
+(play final-countdown-lead 440)
+
+(o/stop)
+
+(play final-countdown-claude0 440)
+
+(play final-countdown2 440)
+
 (play final-countdown2 440)
 
 (play-final-countdown 64 :dur 0.4 :amp 1.2 :fifth 0.4 :cutoff 3500 :boost 2.5)
