@@ -39,7 +39,7 @@
             release 0.9
             gate 1.0]
     (let [env (o/env-gen (o/adsr attack decay sustain release) gate :action o/FREE)
-          sig (* amp env (o/sin-osc freq))]
+          sig (* amp env (o/square freq))]
       (o/out 0 (o/pan2 sig)))))
 
 
@@ -54,10 +54,10 @@
             gate 1.0]
     (let [env (o/env-gen (o/adsr attack decay sustain release) gate :action o/FREE)
           x (o/mix [(o/sin-osc freq)
-                    (o/sin-osc ( * 1.5 freq))
-                    (o/sin-osc ( * 2 freq))])
-          sig (* amp env x)]
-      (o/out 0 sig))))
+                    (o/sin-osc (* 1.5 freq))
+                    (o/sin-osc (* 2 freq))])
+          sig (* 2.0 amp env x)]
+      (o/out 0 (o/pan2 sig)))))
 
 (def default-synth3
   (o/synth [freq 440
@@ -81,19 +81,18 @@
 (play default-synth2 400)
 
 (defn note-on! [note-id]
-  #_(when-let [node0 (@notes& note-id)]
-    (try
-      (o/kill node0)
-      (catch Throwable e
-        (clojure.pprint/pprint e))))
-  (let [freq (midi->hz note-id)
-        node1 (default-synth1 :freq freq)]
-    (swap! notes& assoc note-id node1)
-    node1))
+  (try
+    (let [freq (midi->hz note-id)
+          node1 (da-funk-mono :freq freq)]
+      (swap! notes& assoc note-id node1)
+      node1)
+    (catch Throwable e
+      (clojure.pprint/pprint e))))
 
 (defn note-off! [note-id]
   (when-let [node0 (@notes& note-id)]
-    (o/ctl node0 :gate 0.0))
+    (when-not (-> node0 :status deref (= :destroyed))
+      (o/ctl node0 :gate 0.0)))
   true)
 
 (defn midi-handler [{:keys [command note] :as msg}]
@@ -212,7 +211,68 @@
         sig (* osc env)]
     (o/out out-bus sig)))
 
+(o/defsynth da-funk0
+  [freq 440 dur 1.0 amp 1.0 cutoff 2200 boost 12 dist-level 0.015]
+  (let [env (o/env-gen (o/adsr 0.3 0.7 0.5 0.3) (o/line:kr 1.0 0.0 dur) :action o/FREE)
+        level (+ (* freq 0.25)
+                 (o/env-gen (o/adsr 0.5 0.3 1 0.5) (o/line:kr 1.0 0.0 (/ dur 2)) :level-scale cutoff))
+        osc (o/mix [(o/saw freq)
+                    (o/saw (* freq 0.7491535384383409))])
+        sig (-> osc
+                (o/bpf level 0.6)
+                (* env amp)
+                o/pan2
+                (o/clip2 dist-level)
+                (* boost)
+                o/distort)]
+    (o/out 0 sig)))
 
+(o/defsynth da-funk-cgpt0
+  [freq 440 dur 1.0 amp 1.0 cutoff 2200 boost 12 dist-level 0.015]
+  (let [env (o/env-gen (o/adsr 0.01 0.1 0.8 0.05) (o/line:kr 1.0 0.0 dur) :action o/FREE)
+        level (+ (* freq 0.25)
+                 (o/env-gen (o/adsr 0.2 0.1 1 0.2) (o/line:kr 1.0 0.0 (/ dur 2)) :level-scale cutoff))
+        osc (o/mix [(o/saw freq)
+                    (o/saw (* freq 0.7491535384383409))])
+        sig (-> osc
+                (o/bpf level 0.6)
+                (* env amp)
+                o/pan2
+                (o/clip2 dist-level)
+                (* boost)
+                o/distort)]
+    (o/out 0 sig)))
+
+(defonce *da-funk0-voice (atom nil))
+
+(defn da-funk-mono [& args]
+  (when-let [s @*da-funk0-voice]
+    (when-not (-> s :status deref (= :destroyed))
+      (o/kill s))) ;; Stop previous voice
+  (reset! *da-funk0-voice
+          (apply da-funk0 args)))
+
+(do
+  (da-funk-mono 220)
+  (Thread/sleep 300)
+  (da-funk-mono 260))
+
+
+(o/kill @*da-funk0-voice)
+
+(definst da-funk [freq 440 dur 1.0 amp 1.0 cutoff 2200 boost 12 dist-level 0.015]
+   (let [env (env-gen (adsr 0.3 0.7 0.5 0.3) (line:kr 1.0 0.0 dur) :action FREE)
+         level (+ (* freq 0.25)
+                  (env-gen (adsr 0.5 0.3 1 0.5) (line:kr 1.0 0.0 (/ dur 2)) :level-scale cutoff))
+         osc (mix [(saw freq)
+                   (saw (* freq 0.7491535384383409))])]
+     (-> osc
+         (bpf level 0.6)
+         (* env amp)
+         pan2
+         (clip2 dist-level)
+         (* boost)
+         distort)))
 
 (test-env-gen3)
 
