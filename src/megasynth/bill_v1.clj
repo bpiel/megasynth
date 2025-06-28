@@ -7,6 +7,101 @@
 (def synth-cache& (atom {}))
 (def patch-states& (atom {}))
 
+(def midi-msg-fn& (atom identity))
+
+(def notes& (atom {}))
+
+(defn midi->hz [note]
+  (* 440 (Math/pow 2 (/ (- note 69) 12.0))))
+
+
+;; for a given synth
+;; maintain an instance per key press
+;; set gate to 0 on note-off
+;; clean up dead instances
+
+
+#_
+(reset! midi-msg-fn&
+        (fn [e]
+          (def e1 e)
+          (clojure.pprint/pprint e)))
+
+#_
+(reset! midi-msg-fn& midi-handler)
+
+(def default-synth1
+  (o/synth [freq 440
+            amp 0.7
+            attack 0.1
+            decay 0.9
+            sustain 1.0
+            release 0.9
+            gate 1.0]
+    (let [env (o/env-gen (o/adsr attack decay sustain release) gate :action o/FREE)
+          sig (* amp env (o/sin-osc freq))]
+      (o/out 0 (o/pan2 sig)))))
+
+
+
+(def default-synth2
+  (o/synth [freq 440
+            amp 0.5
+            attack 0.1
+            decay 0.9
+            sustain 1.0
+            release 0.9
+            gate 1.0]
+    (let [env (o/env-gen (o/adsr attack decay sustain release) gate :action o/FREE)
+          x (o/mix [(o/sin-osc freq)
+                    (o/sin-osc ( * 1.5 freq))
+                    (o/sin-osc ( * 2 freq))])
+          sig (* amp env x)]
+      (o/out 0 sig))))
+
+(def default-synth3
+  (o/synth [freq 440
+            amp 0.3
+            attack 0.1
+            decay 0.0
+            sustain 1.0
+            release 0.0
+            gate 1.0]
+    (let [env (o/env-gen (o/adsr attack decay sustain release) gate :action o/NO-ACTION)
+          env2 (o/env-gen (o/adsr attack 1.0 sustain 1.0) gate :action o/FREE)
+          sig1 (* amp env (o/sin-osc freq))
+          sig2 (* amp env2 (o/sin-osc (* 1.5 freq)))
+          x (+ sig1 sig2)]
+      (o/out 0 x))))
+
+(default-synth2)
+
+(o/stop)
+
+(play default-synth2 400)
+
+(defn note-on! [note-id]
+  #_(when-let [node0 (@notes& note-id)]
+    (try
+      (o/kill node0)
+      (catch Throwable e
+        (clojure.pprint/pprint e))))
+  (let [freq (midi->hz note-id)
+        node1 (default-synth1 :freq freq)]
+    (swap! notes& assoc note-id node1)
+    node1))
+
+(defn note-off! [note-id]
+  (when-let [node0 (@notes& note-id)]
+    (o/ctl node0 :gate 0.0))
+  true)
+
+(defn midi-handler [{:keys [command note] :as msg}]
+  (case command
+    :note-on (note-on! note)
+    :note-off (note-off! note)
+    (clojure.pprint/pprint msg)))
+
 {:patch-name {:dev1 {:k {:type :lfo
                          :inputs {:freq :k1 :amp :k2}}
                      :dev [:SYNTH-GOES-HERE :SYNTH-GOES-HERE] ;; knobs have no device
@@ -216,6 +311,19 @@ o/on-node-destroyed
 
 (def m-out0 (midi/midi-out))
 
+(def m-in0 (midi/midi-in "O"))
+
+
+(clojure.pprint/pprint m-in0)
+
+(def oe0 (o/on-event [:midi]
+                     (fn [e]
+                       (def e0 e)
+                       (clojure.pprint/pprint e))
+                     ::catch-all))
+
+(o/remove-event-handler ::catch-all)
+
 (o/midi-note-on)
 
 (defn mk-receiver [short-msg-fn sysex-msg-fn]
@@ -233,6 +341,33 @@ o/on-node-destroyed
                                   :status (.getStatus ^SysexMessage msg)
                                   :length (.getLength ^SysexMessage msg)
                                   :device :DUMMY})))))
+
+(defn mk-receiver2 []
+  (proxy [Receiver] []
+    (close [] nil)
+    (send [msg timestamp] (cond (instance? ShortMessage msg )
+                                (@midi-msg-fn&
+                                 (assoc (midi/midi-msg msg timestamp)
+                                        :device :DUMMY))
+
+                                (instance? SysexMessage msg)
+                                (@midi-msg-fn&
+                                 {:timestamp timestamp
+                                  :data (.getData ^SysexMessage msg)
+                                  :status (.getStatus ^SysexMessage msg)
+                                  :length (.getLength ^SysexMessage msg)
+                                  :device :DUMMY})))))
+
+(def rcvr0 (mk-receiver (fn [e]
+                          (def e1 e)
+                          (println "RECEIVED")
+                          (clojure.pprint/pprint e))
+                        nil))
+
+(def rcvr1 (mk-receiver2))
+
+(def route0 (midi/midi-route m-in0
+                             {:receiver rcvr1}))
 
 (let [msg-fn (fn [x]
                (clojure.pprint/pprint x))
