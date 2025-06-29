@@ -14,11 +14,13 @@
 (defn midi->hz [note]
   (* 440 (Math/pow 2 (/ (- note 69) 12.0))))
 
+(defn play [synth dur-ms & args]
+  (let [vc (apply synth args)]
+    (future
+      (Thread/sleep dur-ms)
+      (o/ctl vc :gate 0.0))
+    true))
 
-;; for a given synth
-;; maintain an instance per key press
-;; set gate to 0 on note-off
-;; clean up dead instances
 
 
 #_
@@ -27,8 +29,6 @@
           (def e1 e)
           (clojure.pprint/pprint e)))
 
-#_
-(reset! midi-msg-fn& midi-handler)
 
 (def default-synth1
   (o/synth [freq 440
@@ -77,7 +77,55 @@
 
 (o/stop)
 
-(play default-synth2 400)
+#_(play default-synth2 400)
+
+
+(o/defsynth da-funk0
+  [freq 440 dur 1.0 amp 1.0 cutoff 2200 boost 12 dist-level 0.015]
+  (let [env (o/env-gen (o/adsr 0.3 0.7 0.5 0.3) (o/line:kr 1.0 0.0 dur) :action o/FREE)
+        level (+ (* freq 0.25)
+                 (o/env-gen (o/adsr 0.5 0.3 1 0.5) (o/line:kr 1.0 0.0 (/ dur 2)) :level-scale cutoff))
+        osc (o/mix [(o/saw freq)
+                    (o/saw (* freq 0.7491535384383409))])
+        sig (-> osc
+                (o/bpf level 0.6)
+                (* env amp)
+                o/pan2
+                (o/clip2 dist-level)
+                (* boost)
+                o/distort)]
+    (o/out 0 sig)))
+
+(o/defsynth da-funk-cgpt0
+  [freq 440 dur 1.0 amp 1.0 cutoff 2200 boost 12 dist-level 0.015]
+  (let [env (o/env-gen (o/adsr 0.01 0.1 0.8 0.05) (o/line:kr 1.0 0.0 dur) :action o/FREE)
+        level (+ (* freq 0.25)
+                 (o/env-gen (o/adsr 0.2 0.1 1 0.2) (o/line:kr 1.0 0.0 (/ dur 2)) :level-scale cutoff))
+        osc (o/mix [(o/saw freq)
+                    (o/saw (* freq 0.7491535384383409))])
+        sig (-> osc
+                (o/bpf level 0.6)
+                (* env amp)
+                o/pan2
+                (o/clip2 dist-level)
+                (* boost)
+                o/distort)]
+    (o/out 0 sig)))
+
+(defonce *da-funk0-voice (atom nil))
+
+(defn da-funk-mono [& args]
+  (when-let [s @*da-funk0-voice]
+    (when-not (-> s :status deref (= :destroyed))
+      (o/kill s))) ;; Stop previous voice
+  (reset! *da-funk0-voice
+          (apply da-funk0 args)))
+
+(do
+  (da-funk-mono 220)
+  (Thread/sleep 300)
+  (da-funk-mono 260))
+
 
 (defn note-on! [note-id]
   (try
@@ -146,194 +194,56 @@
   (Thread/sleep 500)
   (o/ctl vc :gate 0.0))
 
-(defn play [synth dur-ms & args]
-  (let [vc (apply synth args)]
-    (future
-      (Thread/sleep dur-ms)
-      (o/ctl vc :gate 0.0))
-    true))
+(comment
+  (let [sn0 (o/synth [freq 440
+                      amp 0.5
+                      attack 0.01
+                      decay 0.9
+                      sustain 1.0
+                      release 0.9
+                      gate 1.0]
+                     (let [env (o/env-gen (o/adsr attack decay sustain release) gate :action o/FREE)
+                           sig (* amp env (o/sin-osc freq))]
+                       (o/out 0 (o/pan2 sig))))]
+    (play sn0 600)
+    (Thread/sleep 200)
+    (play sn0 600 :freq 220)
+    (Thread/sleep 200)
+    (play sn0 600 :freq 660)
+    (Thread/sleep 200)
+    (play sn0 600 :freq 110)
+    (Thread/sleep 200)
+    (play sn0 600 :freq 880)
+    (Thread/sleep 200))
+  (comment))
 
-(let [sn0 (o/synth [freq 440
-                    amp 0.5
-                    attack 0.01
-                    decay 0.9
-                    sustain 1.0
-                    release 0.9
-                    gate 1.0]
-            (let [env (o/env-gen (o/adsr attack decay sustain release) gate :action o/FREE)
-                  sig (* amp env (o/sin-osc freq))]
-              (o/out 0 (o/pan2 sig))))]
-  (play sn0 600)
-  (Thread/sleep 200)
-  (play sn0 600 :freq 220)
-  (Thread/sleep 200)
-  (play sn0 600 :freq 660)
-  (Thread/sleep 200)
-  (play sn0 600 :freq 110)
-  (Thread/sleep 200)
-  (play sn0 600 :freq 880)
-  (Thread/sleep 200))
-
+#_
 (o/stop)
 
-(let [sn0 (o/synth [freq 440
-                    amp 0.5
-                    attack 0.9
-                    decay 2.0
-                    sustain 0.0
-                    release 2.0
-                    gate 1.0]
-            (let [env (o/env-gen (o/adsr attack decay sustain release) gate :action o/FREE)
-                  sig (* amp env (o/sin-osc freq))]
-              (o/out 0 (o/pan2 sig))))
-      rng (apply concat (repeat 4 (range 1 10)))
-      fs (map (fn [i] (* i 110)) rng)
-      fs' (shuffle fs)]
-  (reduce (fn [agg item]
-            (play sn0 600 :freq item)
-            (Thread/sleep 200)
-            nil)
-          nil
-          fs'))
+(comment
+  (let [sn0 (o/synth [freq 440
+                      amp 0.5
+                      attack 0.9
+                      decay 2.0
+                      sustain 0.0
+                      release 2.0
+                      gate 1.0]
+                     (let [env (o/env-gen (o/adsr attack decay sustain release) gate :action o/FREE)
+                           sig (* amp env (o/sin-osc freq))]
+                       (o/out 0 (o/pan2 sig))))
+        rng (apply concat (repeat 4 (range 1 10)))
+        fs (map (fn [i] (* i 110)) rng)
+        fs' (shuffle fs)]
+    (reduce (fn [agg item]
+              (play sn0 600 :freq item)
+              (Thread/sleep 200)
+              nil)
+            nil
+            fs'))
+  (comment))
 
+#_
 (o/stop)
-
-(o/defsynth env-osc
-  [out-bus 0
-   freq 440
-   gate 1
-   atk 0.01
-   dec 0.2
-   sus 0.6
-   rel 0.3]
-  (let [env (o/env-gen
-              (o/env-adsr atk dec sus rel)
-              gate 1 0 1
-              :action :free)
-        osc (o/sin-osc freq)
-        sig (* osc env)]
-    (o/out out-bus sig)))
-
-(o/defsynth da-funk0
-  [freq 440 dur 1.0 amp 1.0 cutoff 2200 boost 12 dist-level 0.015]
-  (let [env (o/env-gen (o/adsr 0.3 0.7 0.5 0.3) (o/line:kr 1.0 0.0 dur) :action o/FREE)
-        level (+ (* freq 0.25)
-                 (o/env-gen (o/adsr 0.5 0.3 1 0.5) (o/line:kr 1.0 0.0 (/ dur 2)) :level-scale cutoff))
-        osc (o/mix [(o/saw freq)
-                    (o/saw (* freq 0.7491535384383409))])
-        sig (-> osc
-                (o/bpf level 0.6)
-                (* env amp)
-                o/pan2
-                (o/clip2 dist-level)
-                (* boost)
-                o/distort)]
-    (o/out 0 sig)))
-
-(o/defsynth da-funk-cgpt0
-  [freq 440 dur 1.0 amp 1.0 cutoff 2200 boost 12 dist-level 0.015]
-  (let [env (o/env-gen (o/adsr 0.01 0.1 0.8 0.05) (o/line:kr 1.0 0.0 dur) :action o/FREE)
-        level (+ (* freq 0.25)
-                 (o/env-gen (o/adsr 0.2 0.1 1 0.2) (o/line:kr 1.0 0.0 (/ dur 2)) :level-scale cutoff))
-        osc (o/mix [(o/saw freq)
-                    (o/saw (* freq 0.7491535384383409))])
-        sig (-> osc
-                (o/bpf level 0.6)
-                (* env amp)
-                o/pan2
-                (o/clip2 dist-level)
-                (* boost)
-                o/distort)]
-    (o/out 0 sig)))
-
-(defonce *da-funk0-voice (atom nil))
-
-(defn da-funk-mono [& args]
-  (when-let [s @*da-funk0-voice]
-    (when-not (-> s :status deref (= :destroyed))
-      (o/kill s))) ;; Stop previous voice
-  (reset! *da-funk0-voice
-          (apply da-funk0 args)))
-
-(do
-  (da-funk-mono 220)
-  (Thread/sleep 300)
-  (da-funk-mono 260))
-
-(o/defsynth final-countdown0
-  [freq 440
-   dur 0.5
-   amp 0.8
-   detune 0.03
-   cutoff 2000
-   res 0.3
-   pan 0.0
-   boost 2.0]
-  (let [env (o/env-gen (o/adsr 0.01 0.1 0.8 0.1) (o/line:kr 1.0 0.0 dur) :action o/FREE)
-        detune-freqs [freq (* freq (- 1 detune)) (* freq (+ 1 detune))]
-        osc (o/mix [(o/saw freq)
-                    (o/saw (* freq (- 1 detune)))
-                    (o/saw (* freq (+ 1 detune)))])
-        #_(apply o/mix (mapv o/saw detune-freqs))
-        filtered (o/rlpf osc cutoff res)
-        sig (-> filtered
-                (* env amp)
-                o/pan2
-                (* boost))]
-    (o/out 0 sig)))
-
-(o/defsynth final-countdown1
-  [freq 440
-   dur 0.4
-   amp 0.8
-   detune 0.02
-   cutoff 3500
-   res 0.2
-   pan 0.0
-   boost 2.5
-   fifth 0.4     ;; blend in a 5th above
-   dist 0.01]    ;; distortion/clipping level
-  (let [env (o/env-gen (o/adsr 0.01 0.05 0.9 0.05) (o/line:kr 1.0 0.0 dur) :action o/FREE)
-        saw1 (o/saw freq)
-        saw2 (o/saw (* freq (- 1 detune)))
-        saw3 (o/saw (* freq (+ detune)))
-        saw5 (o/saw (* freq (Math/pow 2 (/ 7.0 12.0)))) ;; perfect 5th
-        osc (o/mix [(* saw1 0.9)
-                    (* saw2 0.6)
-                    (* saw3 0.6)
-                    (* saw5 fifth)])
-        filtered (o/rlpf osc cutoff res)
-        distorted (-> filtered
-                      (* env amp)
-                      o/pan2
-                      (o/clip2 dist)
-                      (* boost))]
-    (o/out 0 distorted)))
-
-(o/defsynth final-countdown2
-  [freq 440
-   dur 0.5
-   amp 1.0
-   detune 0.015
-   cutoff 4000
-   res 0.2
-   pan 0.0
-   boost 1.5
-   dist-level 0.02]
-  (let [env (o/env-gen (o/adsr 0.01 0.08 0.8 0.05)
-                       (o/line:kr 1.0 0.0 dur)
-                       :action o/FREE)
-        saw1 (o/saw freq)
-        saw2 (o/saw (* freq (- 1 detune)))
-        saw3 (o/saw (* freq (+ detune)))
-        osc (o/mix [saw1 saw2 saw3])
-        filtered (o/rlpf osc cutoff res)
-        sig (-> filtered
-                (* env amp)
-                o/pan2
-                (o/clip2 dist-level)
-                (* boost))]
-    (o/out 0 sig)))
 
 
 (defn ugen-semitone-ratio [semi]
@@ -377,15 +287,19 @@
         wet (o/free-verb voiced rev-mix rev-room)]
     (o/out 0 wet)))
 
-
+#_
 (play fc-lead-342 400 :amp 2.0 :pitch-env-amt 18.0)
 
+#_
 (o/stop)
 
+#_
 (play final-countdown-claude0 440)
 
+#_
 (play final-countdown2 440)
 
+#_
 (play final-countdown2 440)
 
 
@@ -418,8 +332,10 @@
         right (* distorted env amp 0.9)]
     (o/out 0 [left right])))
 
+#_
 (play final-countdown-claude0 400)
 
+#_
 (o/defsynth final-countdown-lead [freq 440 amp 0.4 gate 1]
   (let [; Amp envelope - quick attack, full sustain, short release
         amp-env (o/env-gen #_(o/envelope [0 1 1 0] [0.01 0.5 0.08] :sustain 1)
@@ -455,13 +371,6 @@
     
     (o/out 0 [left right])))
 
-(o/defsynth fc-syntorial-bill0
-  [freq 440 amp 0.5 gate 1]
-  (let [amp-env (o/env-gen (o/adsr 0.02 0.3 1.0 0.5)
-                           gate :action o/FREE)
-        osc0 (o/saw freq)
-        ]))
-
 (o/defsynth fc-lead-chatgpt0
   [freq 440
    amp 0.5
@@ -493,10 +402,8 @@
     
     (o/out 0 (o/pan2 sig pan))))
 
+#_
 (play fc-lead-chatgpt0 400 :amp 2.0)
-
-(defn semitone-ratio [semi]
-  (Math/pow 2.0 (/ semi 12.0)))
 
 (defn ugen-semitone-ratio [semi]
   (o/pow 2.0 (o/mul-add semi (/ 1.0 12.0) 0)))
@@ -530,7 +437,7 @@
         mixed (o/mix saws)
         
         ;; Amp envelope
-        amp-env (o/env-gen (o/adsr 0.05 amp-decay amp-sustain amp-release)
+        amp-env (o/env-gen (o/adsr 0.1 amp-decay amp-sustain amp-release)
                            gate :action o/FREE)
         voiced (* mixed amp-env amp)
 
@@ -539,26 +446,29 @@
     (o/out 0 wet)))
 
 
-(let [pea 6.0]
-  (play fc-lead-501 200 :amp 2.0 :pitch-env-amt pea :freq 554)
-  (Thread/sleep 200)
-  (play fc-lead-501 200 :amp 2.0 :pitch-env-amt pea :freq 493)
-  (Thread/sleep 200)
-  (play fc-lead-501 500 :amp 2.0 :pitch-env-amt pea :freq 554)
-  (Thread/sleep 500)
-  (play fc-lead-501 1000 :amp 2.0 :pitch-env-amt pea :freq 369)
-  (Thread/sleep 1500)
-  
-  (play fc-lead-501 200 :amp 2.0 :pitch-env-amt pea :freq 587)
-  (Thread/sleep 200)
-  (play fc-lead-501 200 :amp 2.0 :pitch-env-amt pea :freq 554)
-  (Thread/sleep 200)
-  (play fc-lead-501 400 :amp 2.0 :pitch-env-amt pea :freq 587)
-  (Thread/sleep 400)
-  (play fc-lead-501 400 :amp 2.0 :pitch-env-amt pea :freq 554)
-  (Thread/sleep 400)
-  (play fc-lead-501 1000 :amp 2.0 :pitch-env-amt pea :freq 493))
+(comment
+  (let [pea 5.0]
+    (play fc-lead-501 200 :amp 2.0 :pitch-env-amt pea :freq 554)
+    (Thread/sleep 200)
+    (play fc-lead-501 200 :amp 2.0 :pitch-env-amt pea :freq 493)
+    (Thread/sleep 200)
+    (play fc-lead-501 500 :amp 2.0 :pitch-env-amt pea :freq 554)
+    (Thread/sleep 500)
+    (play fc-lead-501 1000 :amp 2.0 :pitch-env-amt pea :freq 369)
+    (Thread/sleep 1500)
+    
+    (play fc-lead-501 200 :amp 2.0 :pitch-env-amt pea :freq 587)
+    (Thread/sleep 200)
+    (play fc-lead-501 200 :amp 2.0 :pitch-env-amt pea :freq 554)
+    (Thread/sleep 200)
+    (play fc-lead-501 400 :amp 2.0 :pitch-env-amt pea :freq 587)
+    (Thread/sleep 400)
+    (play fc-lead-501 400 :amp 2.0 :pitch-env-amt pea :freq 554)
+    (Thread/sleep 400)
+    (play fc-lead-501 1000 :amp 2.0 :pitch-env-amt pea :freq 493))
+  (comment))
 
+#_
 (play fc-lead-chatgpt0 440)
 
 (o/defsynth detune-test
@@ -573,33 +483,29 @@
         env (o/env-gen (o/adsr 0.01 0.3 1 0.5) :gate gate :action o/FREE)]
     (o/out 0 (* env mixed))))
 
+#_
 (play detune-test 500 :detune 0.07)
 
-
+#_
 (play  (o/synth [] (o/out 0 (o/saw 440))) 500)
 
+#_
 (o/stop)
 
+#_
 (o/kill @*da-funk0-voice)
 
+#_
 (test-env-gen3)
 
 #_
 (o/demo (temp1 660))
 
-(hash (temp1 660))
-
+#_
 (o/stop)
 
-o/env-gen
-
-o/FREE
-o/on-event
-o/node-live?
-
-o/on-node-destroyed
-
 (defmulti mk-synth (fn [s-type _] s-type))
+
 
 (defn produce-synth [s-type args]
   (let [k [s-type args]]
@@ -614,6 +520,7 @@ o/on-node-destroyed
 ;; START - Graph Compilation
 ;; =============================================================================
 
+#_
 (defn compile-patch-def!
   [patch-name-kw patch-def]
   (let [patch-state (get @patch-states& patch-name-kw {})]
@@ -677,41 +584,19 @@ o/on-node-destroyed
    :lfo0.amp {:default 0.4
               :range [0.0 1.0]}})
 
+#_
 (def m-out0 (midi/midi-out))
 
+#_
 (def m-in0 nil)
+
+#_
 (def m-in0 (midi/midi-in "O"))
 
-
+#_
 (clojure.pprint/pprint m-in0)
 
-(def oe0 (o/on-event [:midi]
-                     (fn [e]
-                       (def e0 e)
-                       (clojure.pprint/pprint e))
-                     ::catch-all))
-
-(o/remove-event-handler ::catch-all)
-
-(o/midi-note-on)
-
-(defn mk-receiver [short-msg-fn sysex-msg-fn]
-  (proxy [Receiver] []
-    (close [] nil)
-    (send [msg timestamp] (cond (instance? ShortMessage msg )
-                                (short-msg-fn
-                                 (assoc (midi/midi-msg msg timestamp)
-                                        :device :DUMMY))
-
-                                (instance? SysexMessage msg)
-                                (sysex-msg-fn
-                                 {:timestamp timestamp
-                                  :data (.getData ^SysexMessage msg)
-                                  :status (.getStatus ^SysexMessage msg)
-                                  :length (.getLength ^SysexMessage msg)
-                                  :device :DUMMY})))))
-
-(defn mk-receiver2 []
+(defn mk-receiver []
   (proxy [Receiver] []
     (close [] nil)
     (send [msg timestamp] (cond (instance? ShortMessage msg )
@@ -727,21 +612,13 @@ o/on-node-destroyed
                                   :length (.getLength ^SysexMessage msg)
                                   :device :DUMMY})))))
 
-(def rcvr0 (mk-receiver (fn [e]
-                          (def e1 e)
-                          (println "RECEIVED")
-                          (clojure.pprint/pprint e))
-                        nil))
 
-(def rcvr1 (mk-receiver2))
+#_
+(def rcvr1 (mk-receiver))
 
+#_
+(reset! midi-msg-fn& midi-handler)
+
+#_
 (def route0 (midi/midi-route m-in0
                              {:receiver rcvr1}))
-
-(let [msg-fn (fn [x]
-               (clojure.pprint/pprint x))
-      rcvr (mk-receiver msg-fn nil)]
-  (midi/midi-note-on {:receiver rcvr}
-                     40 100))
-
-ShortMessage/
