@@ -43,7 +43,6 @@
       (o/out 0 (o/pan2 sig)))))
 
 
-
 (def default-synth2
   (o/synth [freq 440
             amp 0.5
@@ -340,7 +339,7 @@
 (defn ugen-semitone-ratio [semi]
   (o/pow 2.0 (o/mul-add semi (/ 1.0 12.0) 0)))
 
-(o/defsynth final-countdown-lead
+(o/defsynth fc-lead-342
   [freq 440
    amp 0.6
    detune 0.07
@@ -362,7 +361,7 @@
               (o/pan2 (o/saw f2) (* -0.3 pan-spread))
               (o/pan2 (o/saw f3) (* 0.3 pan-spread))
               (o/pan2 (o/saw f4) pan-spread)]
-        mixed (apply o/mix saws)
+        mixed (o/mix saws)
 
         ; Pitch envelope (optional)
         pitch-env (o/env-gen (o/adsr 0.0 0.01 0.0 0.01) gate)
@@ -379,7 +378,7 @@
     (o/out 0 wet)))
 
 
-(play final-countdown-lead 440)
+(play fc-lead-342 400 :amp 2.0 :pitch-env-amt 18.0)
 
 (o/stop)
 
@@ -389,7 +388,6 @@
 
 (play final-countdown2 440)
 
-(play-final-countdown 64 :dur 0.4 :amp 1.2 :fifth 0.4 :cutoff 3500 :boost 2.5)
 
 
 (o/defsynth kick-drum [amp 0.5]
@@ -405,7 +403,7 @@
         osc2 (o/saw (* freq 1.01)) ; Slight detune for width
         osc3 (o/pulse freq 0.3)    ; Add some pulse wave character
         
-        ; Mix the oscillators
+        ; mix the oscillators
         mixed (+ (* osc1 0.4) (* osc2 0.3) (* osc3 0.3))
         
         ; Filter with envelope modulation
@@ -419,6 +417,50 @@
         left (* distorted env amp)
         right (* distorted env amp 0.9)]
     (o/out 0 [left right])))
+
+(play final-countdown-claude0 400)
+
+(o/defsynth final-countdown-lead [freq 440 amp 0.4 gate 1]
+  (let [; Amp envelope - quick attack, full sustain, short release
+        amp-env (o/env-gen #_(o/envelope [0 1 1 0] [0.01 0.5 0.08] :sustain 1)
+                           (o/envelope [0 1 1 0] [0.01 0.5 0.08])
+                           gate :action o/FREE)
+        
+        ; Pitch modulation envelope - 18 semitone drop over 10ms
+        pitch-env (o/env-gen (o/envelope [18 0] [0.01])
+                             :action o/NO-ACTION)
+        modulated-freq (* freq (o/midi->hz pitch-env))
+        
+        ; 4-voice unison saw waves with 7-cent detune spread
+        detune-cents 7
+        detune-ratio (Math/pow 2 (/ detune-cents 1200))
+        
+        osc1 (o/saw modulated-freq)
+        osc2 (o/saw (* modulated-freq detune-ratio))
+        osc3 (o/saw (* modulated-freq (/ 1 detune-ratio)))
+        osc4 (o/saw (* modulated-freq (* detune-ratio detune-ratio)))
+        
+        ; Mix unison voices with stereo spread
+        mixed (+ osc1 osc2 osc3 osc4)
+        
+        ; Apply amp envelope
+        shaped (* mixed amp-env amp)
+        
+        ; Add reverb (30% wet, medium size)
+        reverbed (+ (* shaped 0.7) (* (o/free-verb shaped 0.5 0.5 0.5) 0.3))
+        
+        ; Stereo output with slight spread
+        left reverbed
+        right (* reverbed 0.9)]
+    
+    (o/out 0 [left right])))
+
+(o/defsynth fc-syntorial-bill0
+  [freq 440 amp 0.5 gate 1]
+  (let [amp-env (o/env-gen (o/adsr 0.02 0.3 1.0 0.5)
+                           gate :action o/FREE)
+        osc0 (o/saw freq)
+        ]))
 
 (o/defsynth fc-lead-chatgpt0
   [freq 440
@@ -451,8 +493,92 @@
     
     (o/out 0 (o/pan2 sig pan))))
 
+(play fc-lead-chatgpt0 400 :amp 2.0)
+
+(defn semitone-ratio [semi]
+  (Math/pow 2.0 (/ semi 12.0)))
+
+(defn ugen-semitone-ratio [semi]
+  (o/pow 2.0 (o/mul-add semi (/ 1.0 12.0) 0)))
+
+(o/defsynth fc-lead-501
+  [freq 440
+   amp 0.6
+   detune 0.07
+   pan-spread 0.4
+   pitch-env-amt 18.0 ;; Set to >0 to activate pitch sweep
+   amp-attack 0.01
+   amp-decay 0.1
+   amp-sustain 0.8
+   amp-release 0.2
+   rev-mix 0.3
+   rev-room 0.5
+   gate 1]
+  (let [ ;; Pitch envelope (optional)
+        pitch-env (o/env-gen (o/adsr 0.0 0.06 0.0 0.01) gate)
+        pitch-mod (ugen-semitone-ratio (* pitch-env pitch-env-amt))
+        freq' (* freq pitch-mod)
+        ;; Detuned saws
+        f1 (* freq' (ugen-semitone-ratio (* -1.0 detune)))
+        f2 (* freq' (ugen-semitone-ratio -0.03))
+        f3 (* freq' (ugen-semitone-ratio 0.03))
+        f4 (* freq' (ugen-semitone-ratio detune))
+        saws [(o/pan2 (o/saw f1) (* -1.0 pan-spread))
+              (o/pan2 (o/saw f2) (* -0.3 pan-spread))
+              (o/pan2 (o/saw f3) (* 0.3 pan-spread))
+              (o/pan2 (o/saw f4) pan-spread)]
+        mixed (o/mix saws)
+        
+        ;; Amp envelope
+        amp-env (o/env-gen (o/adsr 0.05 amp-decay amp-sustain amp-release)
+                           gate :action o/FREE)
+        voiced (* mixed amp-env amp)
+
+        ;; Reverb
+        wet (o/free-verb voiced rev-mix rev-room)]
+    (o/out 0 wet)))
+
+
+(let [pea 6.0]
+  (play fc-lead-501 200 :amp 2.0 :pitch-env-amt pea :freq 554)
+  (Thread/sleep 200)
+  (play fc-lead-501 200 :amp 2.0 :pitch-env-amt pea :freq 493)
+  (Thread/sleep 200)
+  (play fc-lead-501 500 :amp 2.0 :pitch-env-amt pea :freq 554)
+  (Thread/sleep 500)
+  (play fc-lead-501 1000 :amp 2.0 :pitch-env-amt pea :freq 369)
+  (Thread/sleep 1500)
+  
+  (play fc-lead-501 200 :amp 2.0 :pitch-env-amt pea :freq 587)
+  (Thread/sleep 200)
+  (play fc-lead-501 200 :amp 2.0 :pitch-env-amt pea :freq 554)
+  (Thread/sleep 200)
+  (play fc-lead-501 400 :amp 2.0 :pitch-env-amt pea :freq 587)
+  (Thread/sleep 400)
+  (play fc-lead-501 400 :amp 2.0 :pitch-env-amt pea :freq 554)
+  (Thread/sleep 400)
+  (play fc-lead-501 1000 :amp 2.0 :pitch-env-amt pea :freq 493))
 
 (play fc-lead-chatgpt0 440)
+
+(o/defsynth detune-test
+  [freq 440 amp 0.7 detune 0.07 gate 1]
+  (let [;;f1 (* freq (ugen-semitone-ratio (* -1.0 detune)))
+        f2 freq
+        f3 (* freq (ugen-semitone-ratio detune))
+        saws [#_(o/pan2 (o/saw f1))
+              (o/pan2 (o/saw f2))
+              (o/pan2 (o/saw f3))]
+        mixed (o/mix saws)
+        env (o/env-gen (o/adsr 0.01 0.3 1 0.5) :gate gate :action o/FREE)]
+    (o/out 0 (* env mixed))))
+
+(play detune-test 500 :detune 0.07)
+
+
+(play  (o/synth [] (o/out 0 (o/saw 440))) 500)
+
+(o/stop)
 
 (o/kill @*da-funk0-voice)
 
