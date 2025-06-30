@@ -7,7 +7,11 @@
 (def synth-cache& (atom {}))
 (def patch-states& (atom {}))
 
-(def midi-msg-fn& (atom identity))
+(defonce midi-msg-fn& (atom identity))
+
+(defonce current-midi& (atom nil))
+
+(defonce current-synth& (atom nil))
 
 (def notes& (atom {}))
 
@@ -21,6 +25,9 @@
       (o/ctl vc :gate 0.0))
     true))
 
+(defn set-synth! [s]
+  (reset! current-synth& s))
+
 
 
 #_
@@ -28,6 +35,7 @@
         (fn [e]
           (def e1 e)
           (clojure.pprint/pprint e)))
+
 
 
 (def default-synth1
@@ -121,6 +129,18 @@
   (reset! *da-funk0-voice
           (apply da-funk0 args)))
 
+(defn ->mono [syn]
+  (let [mono& (atom nil)]
+    (fn [& args]
+      (when-let [s @mono&]
+        (when-not (-> s :status deref (= :destroyed))
+          (o/kill s))) 
+      (reset! mono&
+              (apply syn args)))))
+
+(def da-funk-mono0 (->mono da-funk0))
+
+#_
 (do
   (da-funk-mono 220)
   (Thread/sleep 300)
@@ -130,7 +150,7 @@
 (defn note-on! [note-id]
   (try
     (let [freq (midi->hz note-id)
-          node1 (da-funk-mono :freq freq)]
+          node1 (@current-synth& :freq freq)]
       (swap! notes& assoc note-id node1)
       node1)
     (catch Throwable e
@@ -138,8 +158,14 @@
 
 (defn note-off! [note-id]
   (when-let [node0 (@notes& note-id)]
-    (when-not (-> node0 :status deref (= :destroyed))
-      (o/ctl node0 :gate 0.0)))
+    (try
+      (when-not (-> node0 :status deref (= :destroyed))
+        (o/ctl node0 :gate 0.0))
+      (catch Throwable e
+        (def node00 node0)
+        (def node00-state (-> node0 :status deref))
+        (clojure.pprint/pprint e)
+        (clojure.pprint/pprint node0))))
   true)
 
 (defn midi-handler [{:keys [command note] :as msg}]
@@ -445,6 +471,193 @@
         wet (o/free-verb voiced rev-mix rev-room)]
     (o/out 0 wet)))
 
+(def fc-lead-x
+  (o/synth 
+      [freq 440
+       amp 2
+       detune 0.07
+       pan-spread 0.4
+       pitch-env-amt 9.0 ;; Set to >0 to activate pitch sweep
+       amp-attack 0.05
+       amp-decay 0.1
+       amp-sustain 0.8
+       amp-release 0.2
+       rev-mix 0.3
+       rev-room 0.6
+       gate 1]
+      (let [ ;; Pitch envelope (optional)
+            pitch-env (o/env-gen (o/adsr 0.0 0.06 0.0 0.01) gate)
+            pitch-mod (ugen-semitone-ratio (* pitch-env pitch-env-amt))
+            freq' (* freq pitch-mod)
+            ;; Detuned saws
+            f1 (* freq' (ugen-semitone-ratio (* -1.0 detune)))
+            f2 (* freq' (ugen-semitone-ratio -0.03))
+            f3 (* freq' (ugen-semitone-ratio 0.03))
+            f4 (* freq' (ugen-semitone-ratio detune))
+            saws [(o/pan2 (o/saw f1) (* -1.0 pan-spread))
+                  (o/pan2 (o/saw f2) (* -0.3 pan-spread))
+                  (o/pan2 (o/saw f3) (* 0.3 pan-spread))
+                  (o/pan2 (o/saw f4) pan-spread)]
+            mixed (o/mix saws)
+                      
+            ;; Amp envelope
+            amp-env (o/env-gen (o/adsr amp-attack amp-decay amp-sustain amp-release)
+                               gate :action o/FREE)
+            voiced (* mixed amp-env amp)
+
+            ;; Reverb
+            wet (o/free-verb voiced rev-mix rev-room)]
+        (o/out 0 wet))))
+
+(def fc-lead-x2
+  (o/synth 
+      [freq 440
+       amp 2
+       detune 0.07
+       pan-spread 0.4
+       pitch-env-amt 9.0 ;; Set to >0 to activate pitch sweep
+       amp-attack 0.05
+       amp-decay 0.1
+       amp-sustain 0.8
+       amp-release 0.2
+       rev-mix 0.3
+       rev-room 0.6
+       gate 1]
+      (let [pitch-env (o/env-gen (o/adsr 0.0 0.025 0.0 0.01) gate)
+            pitch-mod (ugen-semitone-ratio (* pitch-env pitch-env-amt))
+            freq' (* freq pitch-mod)
+
+            ;; Detuned saws
+            f1 (* freq' (ugen-semitone-ratio (* -1.0 detune)))
+            f2 (* freq' (ugen-semitone-ratio -0.03))
+            f3 (* freq' (ugen-semitone-ratio 0.03))
+            f4 (* freq' (ugen-semitone-ratio detune))
+            saws [(o/pan2 (o/saw f1) (* -1.0 pan-spread))
+                  (o/pan2 (o/saw f2) (* -0.3 pan-spread))
+                  (o/pan2 (o/saw f3) (* 0.3 pan-spread))
+                  (o/pan2 (o/saw f4) pan-spread)]
+            mixed (o/mix saws)
+
+            ;; Filter envelope
+            filter-env (o/env-gen (o/adsr 0.01 0.1 0.0 0.1) gate)
+            filtered (o/rlpf mixed
+                             (+ 2000 (* 2000 filter-env)) ;; opens from 2000 to ~4000
+                             0.1)
+
+            driven (o/tanh (* filtered 3)) ;; distortion
+            amp-env (o/env-gen (o/adsr amp-attack amp-decay amp-sustain amp-release)
+                               gate :action o/FREE)
+            voiced (* driven amp-env amp)
+            wet (o/free-verb voiced rev-mix rev-room)]
+        (o/out 0 wet))))
+
+(def fc-lead-x3
+  (o/synth 
+    [freq 440
+     amp 1.5
+     detune 0.07
+     pan-spread 0.4
+     pitch-env-amt 12.0 ;;9.0
+     amp-attack 0.05
+     amp-decay 0.1
+     amp-sustain 0.8
+     amp-release 0.2
+     cutoff-base 4000 ;; 2000
+     cutoff-env-amt 4000 ;; 2000
+     res 0.1 ;; 0.1
+     rev-mix 0.3
+     rev-room 0.6
+     gate 1]
+    (let [;; Pitch sweep
+          pitch-env (o/env-gen (o/adsr 0.0 0.06 0.0 0.01) gate)
+          pitch-mod (ugen-semitone-ratio (* pitch-env pitch-env-amt))
+          freq' (* freq pitch-mod)
+
+          ;; Detuned saws
+          f1 (* freq' (ugen-semitone-ratio (* -1.0 detune)))
+          f2 (* freq' (ugen-semitone-ratio -0.03))
+          f3 (* freq' (ugen-semitone-ratio 0.03))
+          f4 (* freq' (ugen-semitone-ratio detune))
+          saws [(o/pan2 (o/saw f1) (* -1.0 pan-spread))
+                (o/pan2 (o/saw f2) (* -0.3 pan-spread))
+                (o/pan2 (o/saw f3) (* 0.3 pan-spread))
+                (o/pan2 (o/saw f4) pan-spread)]
+          mixed (o/mix saws)
+
+          ;; Filter for body fullness
+          filter-env (o/env-gen (o/adsr 0.01 0.1 0.0 0.1) gate)
+          cutoff (+ cutoff-base (* cutoff-env-amt filter-env))
+          filtered (o/rlpf mixed cutoff res)
+
+          ;; Light drive
+          driven (o/tanh (* filtered 3))
+
+          ;; Amp envelope
+          amp-env (o/env-gen (o/adsr amp-attack amp-decay amp-sustain amp-release)
+                             gate :action o/FREE)
+          voiced (* driven amp-env amp)
+
+          ;; Reverb
+          wet (o/free-verb voiced rev-mix rev-room)]
+      (o/out 0 wet))))
+
+
+(def fc-lead-x4
+  (o/synth 
+      [freq 440
+       amp 2
+       detune 0.07
+       pan-spread 0.4
+       pitch-env-amt 6.0 ;; 9.0
+       amp-attack 0.05
+       amp-decay 0.1
+       amp-sustain 0.8
+       amp-release 0.2
+       rev-mix 0.3
+       rev-room 2.0 ;; 0.6
+       pulse-width 0.3
+       bpf-freq 1800 ;; 1400
+       bpf-q 2.0     ;; 1.0
+       dist-gain 4.0
+       gate 1]
+      (let [ ;; Pitch envelope
+            pitch-env (o/env-gen (o/adsr 0.0 0.05 0.0 0.01) gate)
+            pitch-mod (ugen-semitone-ratio (* pitch-env pitch-env-amt))
+            freq' (* freq pitch-mod)
+
+            ;; Oscillators: saw + pulse blend
+            f1 (* freq' (ugen-semitone-ratio (* -1.0 detune)))
+            f2 (* freq' (ugen-semitone-ratio detune))
+            f3 freq'
+            saw (o/saw f3)
+            pulse1 (o/pulse f1 pulse-width)
+            pulse2 (o/pulse f2 pulse-width)
+
+            ;; Pan and mix
+            sigs [(o/pan2 saw 0.0)
+                  (o/pan2 pulse1 (* -0.4 pan-spread))
+                  (o/pan2 pulse2 (* 0.4 pan-spread))]
+            mixed (o/mix sigs)
+
+            ;; Bandpass filtering (trumpet-like tone focus)
+            brassy (o/bpf mixed bpf-freq bpf-q)
+
+            ;; Distortion after BPF for harmonic "bite"
+            driven (o/tanh (* brassy dist-gain))
+
+            ;; Amp envelope
+            amp-env (o/env-gen (o/adsr amp-attack amp-decay amp-sustain amp-release)
+                               gate :action o/NO-ACTION)
+            tail-env (o/env-gen (o/lin 0.001 1.0 1.0)
+                                gate :action o/FREE) 
+            voiced (* driven amp-env amp tail-env)
+
+            ;; Reverb
+            wet (o/free-verb voiced rev-mix rev-room)]
+        (o/out 0 wet))))
+
+(comment)
+
 
 (comment
   (let [pea 5.0]
@@ -466,6 +679,7 @@
     (play fc-lead-501 400 :amp 2.0 :pitch-env-amt pea :freq 554)
     (Thread/sleep 400)
     (play fc-lead-501 1000 :amp 2.0 :pitch-env-amt pea :freq 493))
+  
   (comment))
 
 #_
@@ -590,6 +804,8 @@
 #_
 (def m-in0 nil)
 
+
+
 #_
 (def m-in0 (midi/midi-in "O"))
 
@@ -613,6 +829,18 @@
                                   :device :DUMMY})))))
 
 
+(defn setup-midi-in []
+  (let [m-in (midi/midi-in "O")]
+    (if-not (nil? m-in)
+      (let [_ (reset! current-midi& m-in)
+            rcvr (mk-receiver)
+            route (midi/midi-route m-in
+                                   {:receiver rcvr})]
+        true)
+      (throw (Exception. "MIDI INPUT NOT FOUND")))))
+
+#_(setup-midi-in)
+
 #_
 (def rcvr1 (mk-receiver))
 
@@ -620,5 +848,39 @@
 (reset! midi-msg-fn& midi-handler)
 
 #_
-(def route0 (midi/midi-route m-in0
-                             {:receiver rcvr1}))
+(reset! current-synth& da-funk-mono)
+
+
+(defn setup-all []
+  (reset! midi-msg-fn& midi-handler)
+  (reset! current-synth& da-funk-mono)
+  (setup-midi-in))
+
+#_(setup-all)
+
+(comment
+
+  (set-synth! da-funk-mono)
+
+  (def fc-lead-501-mono (->mono fc-lead-x))
+
+  (do (def fc-lead-501-mono (->mono fc-lead-x))
+      (set-synth! fc-lead-501-mono))
+
+  (do (def fc-lead-501-mono (->mono fc-lead-x2))
+      (set-synth! fc-lead-501-mono))
+
+  (do (def fc-lead-501-mono (->mono fc-lead-x3))
+      (set-synth! fc-lead-501-mono))
+
+  (do (def fc-lead-501-mono (->mono fc-lead-x4))
+      (set-synth! fc-lead-501-mono))
+
+  (play fc-lead-x4 400)
+
+  (comment))
+
+#_(set-synth! fc-lead-501-mono)
+
+#_(set-synth! da-funk-mono0)
+
