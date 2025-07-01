@@ -13,6 +13,8 @@
 
 (defonce current-synth& (atom nil))
 
+(defonce synths& (atom {}))
+
 (def notes& (atom {}))
 
 (defn midi->hz [note]
@@ -28,6 +30,67 @@
 (defn set-synth! [s]
   (reset! current-synth& s))
 
+(defn scale-knob-value
+  "Convert 0.0-1.0 knob value to actual parameter range"
+  [knob-value min-val max-val curve]
+  (case curve
+    :linear (+ min-val (* knob-value (- max-val min-val)))
+    :exponential (+ min-val (* (Math/pow knob-value 2) (- max-val min-val)))
+    :logarithmic (+ min-val (* (Math/sqrt knob-value) (- max-val min-val)))
+    (+ min-val (* knob-value (- max-val min-val)))))
+
+(defmacro mk-synth* [args body]
+  `(o/synth ~(into ['freq 440
+                    'gate 1]
+                   (mapcat (fn [[a [_ v]]] [a v])
+                           (partition 2 args)))
+     ~body))
+
+(macroexpand-1
+ ')
+
+(mk-synth* [amp [0.01 1.0 3.0]
+              dur [0.01 1.0 10.0]
+              cutoff [1 2200 6000]
+              boost [0 12 24]
+              dist-level [0.001 0.015 0.2]]
+   (let [env (o/env-gen (o/adsr 0.3 0.7 0.5 0.3) (o/line:kr 1.0 0.0 dur) :action o/FREE)
+         level (+ (* freq 0.25)
+                  (o/env-gen (o/adsr 0.5 0.3 1 0.5) (o/line:kr 1.0 0.0 (/ dur 2)) :level-scale cutoff))
+         osc (o/mix [(o/saw freq)
+                     (o/saw (* freq 0.7491535384383409))])
+         sig (-> osc
+                 (o/bpf level 0.6)
+                 (* env amp)
+                 o/pan2
+                 (o/clip2 dist-level)
+                 (* boost)
+                 o/distort)]
+     (o/out 0 sig)))
+
+(defmacro mk-synth [args body]
+  {:arg-specs args
+   :synth (mk-synth* args body)})
+
+(mk-synth
+ [amp [0.01 1.0 3.0]
+  dur [0.01 1.0 10.0]
+  cutoff [1 2200 6000]
+  boost [0 12 24]
+  dist-level [0.001 0.015 0.2]]
+ (let [env (o/env-gen (o/adsr 0.3 0.7 0.5 0.3) (o/line:kr 1.0 0.0 dur) :action o/FREE)
+       level (+ (* freq 0.25)
+                (o/env-gen (o/adsr 0.5 0.3 1 0.5) (o/line:kr 1.0 0.0 (/ dur 2)) :level-scale cutoff))
+       osc (o/mix [(o/saw freq)
+                   (o/saw (* freq 0.7491535384383409))])
+       sig (-> osc
+               (o/bpf level 0.6)
+               (* env amp)
+               o/pan2
+               (o/clip2 dist-level)
+               (* boost)
+               o/distort)]
+   (o/out 0 sig)))
 
 
 #_
@@ -168,12 +231,24 @@
         (clojure.pprint/pprint node0))))
   true)
 
+(defn control-change! [{:keys [command note status data1 data2 velocity] :as msg}]
+  (case data1
+    14 (set-synth! da-funk-mono)
+    15 (set-synth! (->mono fc-lead-x4))))
+
+(defn short-print-midi-msg [{:keys [command note status data1 data2 velocity] :as msg}]
+  (format "cmd %s, status %s, note %d, vel %d, data [%d %d]\n"
+          command status note velocity data1 data2))
+
 (defn midi-handler [{:keys [command note] :as msg}]
   #_(clojure.pprint/pprint msg)
+  (println (short-print-midi-msg msg))
   (case command
     :note-on (note-on! note)
     :note-off (note-off! note)
-    (clojure.pprint/pprint msg)))
+    :control-change (control-change! msg)
+    nil
+    #_(clojure.pprint/pprint msg)))
 
 #_(midi-handler {:command :note-on :note 60})
 #_(midi-handler {:command :note-off :note 60})
