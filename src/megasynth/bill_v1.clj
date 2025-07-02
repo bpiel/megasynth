@@ -152,7 +152,7 @@
              (o/out 0 wet))
            {:mono? true}))
 
-(volca-keys-sim :lfo-rate 2.0)
+(volca-keys-sim :lfo-rate 10.0)
 
 (o/stop)
 
@@ -198,7 +198,7 @@
         ;; Detuned 3-voice oscillator
         base-freq (* freq pitch-lfo)
         ratios [(* -1.0 detune) 0 detune]
-        saws (map #(o/saw (* base-freq (ugen-semitone-ratio %))) ratios)
+        saws (mapv #(o/saw (* base-freq (ugen-semitone-ratio %))) ratios)
         osc (apply + saws)
 
         ;; Envelopes
@@ -222,6 +222,89 @@
     (o/out 0 out)))
 
 
+
+(o/defsynth volca-keys0
+  [freq 440
+   gate 1
+
+   amp 0.9
+   detune 0.0
+
+   ;; Filter
+   cutoff 1200
+   res 0.7
+   env-amt 1000
+
+   ;; Envelopes
+   attack 0.01
+   decay 0.2
+   sustain 0.5
+   release 0.3
+   
+   ;; Delay
+   delay-time 0.25
+   delay-fb 0.4
+   delay-mix 0.3
+
+   ;; LFO
+   lfo-rate 5.0              ;; Hz
+   lfo-depth 1.0             ;; global depth scaler
+   lfo->pitch 0.0            ;; amount in semitones
+   lfo->cutoff 0.0           ;; amount added to cutoff
+   lfo->amp 0.0              ;; amplitude modulation depth
+
+   pan 0.0]
+  (let [;; LFO signal (triangle wave)
+        lfo (o/lf-tri lfo-rate)
+
+        ;; Apply LFO modulations
+        pitch-lfo (* lfo (ugen-semitone-ratio-1 (* lfo->pitch lfo-depth)))
+        cutoff-lfo (* lfo lfo->cutoff lfo-depth cutoff)
+        amp-lfo ;;(+ 1.0 (* lfo lfo->amp lfo-depth))  ;; centered around 1.0
+        (o/lin-lin lfo -1 1 (- 1 lfo->amp) (+ 1 lfo->amp))
+
+
+        ;; Detuned 3-voice oscillator
+        freq*lfo (+ freq (* freq pitch-lfo))
+        ratios [(* -1.0 detune) 0 detune]
+        saws (mapv #(o/saw (* freq*lfo (ugen-semitone-ratio %))) ratios)
+        osc (o/mix saws)
+
+        ;; Envelopes
+        amp-env (o/env-gen (o/adsr attack decay sustain release)
+                           gate :action o/FREE)
+        mod-cutoff (+ cutoff cutoff-lfo (* env-amt amp-env))
+
+        ;; Filtered signal
+        filtered (o/rlpf osc mod-cutoff res)
+
+        ;; Amplitude envelope w/ tremolo
+        voiced (* filtered amp-env amp amp-lfo)
+
+        ;; Delay
+        delayed (o/comb-l voiced delay-time delay-time delay-fb)
+        mixed (o/x-fade2 voiced delayed delay-mix 1.0)
+        
+        ;; Output
+        out (o/pan2 mixed pan)]
+    (o/out 0 out)))
+
+(play volca-keys0 1000
+      :sustain 1.0
+      :decay 3.0
+      :detune 0.5
+      :lfo-rate 5.0
+      :lfo->pitch 0.0
+      :lfo->cutoff 0.0
+      :lfo->amp 0.9
+      :cutoff 4000
+      :delay-time 0.27
+      :delay-fb 1.0
+      :delay-mix 0.0)
+
+
+
+(o/stop)
 
 #_
 (reset! midi-msg-fn&
@@ -508,9 +591,19 @@
 #_
 (o/stop)
 
+#_(Math/pow 2.0 (* 0 (/ 1.0 12)))
+
+#_  (+ (Math/pow 2.0 (* 1.0 (/ 1.0 12.0)))
+     -1.0)
 
 (defn ugen-semitone-ratio [semi]
   (o/pow 2.0 (o/mul-add semi (/ 1.0 12.0) 0)))
+
+(defn ugen-semitone-ratio-1 [semi]
+  (o/mul-add (o/pow 2.0 (o/mul-add semi (/ 1.0 12.0) 0.0))
+             1.0 -1.0))
+
+
 
 (o/defsynth fc-lead-342
   [freq 440
