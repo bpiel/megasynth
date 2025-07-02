@@ -11,9 +11,9 @@
 
 (defonce current-midi& (atom nil))
 
-(defonce current-synth& (atom nil))
+(defonce current-synth& (atom nil)) ;; keyword
 
-(defonce synths& (atom {}))
+(defonce synths-ifaces& (atom {}))
 
 (def notes& (atom {}))
 
@@ -27,8 +27,8 @@
       (o/ctl vc :gate 0.0))
     true))
 
-(defn set-synth! [s]
-  (reset! current-synth& s))
+(defn set-synth! [s-kw]
+  (reset! current-synth& s-kw))
 
 (defn scale-knob-value
   "Convert 0.0-1.0 knob value to actual parameter range"
@@ -39,59 +39,44 @@
     :logarithmic (+ min-val (* (Math/sqrt knob-value) (- max-val min-val)))
     (+ min-val (* knob-value (- max-val min-val)))))
 
-(defmacro mk-synth* [args body]
+(defmacro mk-synth [args body]
   `(o/synth ~(into ['freq 440
                     'gate 1]
                    (mapcat (fn [[a [_ v]]] [a v])
                            (partition 2 args)))
      ~body))
 
-(macroexpand-1
- ')
 
-(mk-synth* [amp [0.01 1.0 3.0]
-              dur [0.01 1.0 10.0]
-              cutoff [1 2200 6000]
-              boost [0 12 24]
-              dist-level [0.001 0.015 0.2]]
-   (let [env (o/env-gen (o/adsr 0.3 0.7 0.5 0.3) (o/line:kr 1.0 0.0 dur) :action o/FREE)
-         level (+ (* freq 0.25)
-                  (o/env-gen (o/adsr 0.5 0.3 1 0.5) (o/line:kr 1.0 0.0 (/ dur 2)) :level-scale cutoff))
-         osc (o/mix [(o/saw freq)
-                     (o/saw (* freq 0.7491535384383409))])
-         sig (-> osc
-                 (o/bpf level 0.6)
-                 (* env amp)
-                 o/pan2
-                 (o/clip2 dist-level)
-                 (* boost)
-                 o/distort)]
-     (o/out 0 sig)))
+(defmacro mk-synth-iface [args body & [{:keys [mono?]}]]
+  (let [args' (vec (partition 2 args))
+        syn (if mono?
+              `(->mono (mk-synth* ~args ~body))
+              `(mk-synth* ~args ~body))]
+    `{:args '~args'
+      :synth ~syn}))
 
-(defmacro mk-synth [args body]
-  {:arg-specs args
-   :synth (mk-synth* args body)})
-
-(mk-synth
- [amp [0.01 1.0 3.0]
-  dur [0.01 1.0 10.0]
-  cutoff [1 2200 6000]
-  boost [0 12 24]
-  dist-level [0.001 0.015 0.2]]
- (let [env (o/env-gen (o/adsr 0.3 0.7 0.5 0.3) (o/line:kr 1.0 0.0 dur) :action o/FREE)
-       level (+ (* freq 0.25)
-                (o/env-gen (o/adsr 0.5 0.3 1 0.5) (o/line:kr 1.0 0.0 (/ dur 2)) :level-scale cutoff))
-       osc (o/mix [(o/saw freq)
-                   (o/saw (* freq 0.7491535384383409))])
-       sig (-> osc
-               (o/bpf level 0.6)
-               (* env amp)
-               o/pan2
-               (o/clip2 dist-level)
-               (* boost)
-               o/distort)]
-   (o/out 0 sig)))
-
+(swap! synths-ifaces&
+        assoc :da-funk
+        (mk-synth-iface
+            [amp [0.01 1.0 3.0]
+             dur [0.01 1.0 10.0]
+             cutoff [1 2200 6000]
+             boost [0 12 24]
+             dist-level [0.001 0.015 0.2]]
+            (let [env (o/env-gen (o/adsr 0.3 0.7 0.5 0.3) (o/line:kr 1.0 0.0 dur) :action o/FREE)
+                  level (+ (* freq 0.25)
+                           (o/env-gen (o/adsr 0.5 0.3 1 0.5) (o/line:kr 1.0 0.0 (/ dur 2)) :level-scale cutoff))
+                  osc (o/mix [(o/saw freq)
+                              (o/saw (* freq 0.7491535384383409))])
+                  sig (-> osc
+                          (o/bpf level 0.6)
+                          (* env amp)
+                          o/pan2
+                          (o/clip2 dist-level)
+                          (* boost)
+                          o/distort)]
+              (o/out 0 sig))
+            {:mono? true}))
 
 #_
 (reset! midi-msg-fn&
@@ -192,6 +177,12 @@
   (reset! *da-funk0-voice
           (apply da-funk0 args)))
 
+(defn destroyed? [node]
+  (def node0 node)
+  (-> node :status deref (= :destroyed)))
+
+(:status node0)
+
 (defn ->mono [syn]
   (let [mono& (atom nil)]
     (fn [& args]
@@ -213,11 +204,15 @@
 (defn note-on! [note-id]
   (try
     (let [freq (midi->hz note-id)
-          node1 (@current-synth& :freq freq)]
+          syn-kw @current-synth&
+          syn (:synth (@synths-ifaces& syn-kw))
+          node1 (syn :freq freq)]
       (swap! notes& assoc note-id node1)
       node1)
     (catch Throwable e
       (clojure.pprint/pprint e))))
+
+#_(note-on! 60)
 
 (defn note-off! [note-id]
   (when-let [node0 (@notes& note-id)]
@@ -231,10 +226,31 @@
         (clojure.pprint/pprint node0))))
   true)
 
+(defn change-synth-arg! [idx val]
+  (let [current-synth @current-synth&
+        {:keys [synth args]} (@synths-ifaces& current-synth)
+        [arg-sym [lo _ hi]] (nth args idx)
+        arg-kw (-> arg-sym name keyword)
+        new-val (scale-knob-value (/ val 127.0)
+                                  lo
+                                  hi
+                                  :linear)
+        notes @notes&]
+    (clojure.pprint/pprint [idx val arg-sym lo hi])        
+    (clojure.pprint/pprint [synth arg-kw new-val])
+    (doseq [[_ n] notes]
+      (try
+        (when-not (destroyed? n)
+          (o/ctl n arg-kw new-val))
+        (catch Throwable e
+          (clojure.pprint/pprint [e synth arg-kw new-val]))))
+    true))
+
 (defn control-change! [{:keys [command note status data1 data2 velocity] :as msg}]
   (case data1
     14 (set-synth! da-funk-mono)
-    15 (set-synth! (->mono fc-lead-x4))))
+    15 (set-synth! (->mono fc-lead-x4))
+    (change-synth-arg! (- data1 20) data2)))
 
 (defn short-print-midi-msg [{:keys [command note status data1 data2 velocity] :as msg}]
   (format "cmd %s, status %s, note %d, vel %d, data [%d %d]\n"
@@ -793,17 +809,6 @@
 #_
 (o/stop)
 
-(defmulti mk-synth (fn [s-type _] s-type))
-
-
-(defn produce-synth [s-type args]
-  (let [k [s-type args]]
-    (if-let [r (@synth-cache& k)]
-      r
-      (let [r (mk-synth s-type args)]
-        (swap! synth-cache& assoc k r)
-        r))))
-
 
 ;; =============================================================================
 ;; START - Graph Compilation
@@ -928,7 +933,8 @@
 
 (defn setup-all []
   (reset! midi-msg-fn& midi-handler)
-  (reset! current-synth& da-funk-mono)
+  #_(reset! current-synth& da-funk-mono)
+  (reset! current-synth& :da-funk)
   (setup-midi-in))
 
 #_(setup-all)
