@@ -17,6 +17,9 @@
 
 (def notes& (atom {}))
 
+(defn map->vec [m]
+(vec (mapcat identity m)))
+
 (defn midi->hz [note]
   (* 440 (Math/pow 2 (/ (- note 69) 12.0))))
 
@@ -46,14 +49,31 @@
                            (partition 2 args)))
      ~body))
 
+(defn ->arg-states [args]
+  (apply hash-map (mapcat (fn [[a [_ v]]] [(keyword a) v])
+                          (partition 2 args))))
+
+(defn ->mono [syn]
+  (let [mono& (atom nil)]
+    (fn [& args]
+      (when-let [s @mono&]
+        (when-not (-> s :status deref (= :destroyed))
+          (o/kill s))) 
+      (reset! mono&
+              (apply syn args)))))
 
 (defmacro mk-synth-iface [args body & [{:keys [mono?]}]]
-  (let [args' (vec (partition 2 args))
+  (let [arg-states (->arg-states args)
+        args' (vec (partition 2 args))
         syn (if mono?
-              `(->mono (mk-synth* ~args ~body))
-              `(mk-synth* ~args ~body))]
+              `(->mono (mk-synth ~args ~body))
+              `(mk-synth ~args ~body))]
     `{:args '~args'
+      :arg-states ~arg-states
       :synth ~syn}))
+
+(defn ugen-semitone-ratio [semi]
+  (o/pow 2.0 (o/mul-add semi (/ 1.0 12.0) 0)))
 
 (swap! synths-ifaces&
         assoc :da-funk
@@ -77,6 +97,60 @@
                           o/distort)]
               (o/out 0 sig))
             {:mono? true}))
+
+(swap! synths-ifaces&
+       assoc :final-countdown
+       (mk-synth-iface
+           [amp [0.01 2 4.0]
+            detune [0.0 0.07 0.2]
+            pan-spread [0.0 0.4 1.0]
+            pitch-env-amt [0.0 6.0 12.0] ;; 9.0
+            amp-attack [0.0 0.05 0.2]
+            amp-decay [0.0 0.1 0.2]
+            amp-sustain [0.0 0.8 1.6]
+            amp-release [0.0 0.2 0.4]
+            rev-mix [0.0 0.3 0.6]
+            rev-room [0.0 2.0 4.0] ;; 0.6
+            pulse-width [0.0 0.3 0.6]
+            bpf-freq [100 1800 4000] ;; 1400
+            bpf-q [0.1 2.0 4.0]     ;; 1.0
+            dist-gain [0.0 4.0 8.0]]
+           (let [ ;; Pitch envelope
+                 pitch-env (o/env-gen (o/adsr 0.0 0.05 0.0 0.01) gate)
+                 pitch-mod (ugen-semitone-ratio (* pitch-env pitch-env-amt))
+                 freq' (* freq pitch-mod)
+
+                 ;; Oscillators: saw + pulse blend
+                 f1 (* freq' (ugen-semitone-ratio (* -1.0 detune)))
+                 f2 (* freq' (ugen-semitone-ratio detune))
+                 f3 freq'
+                 saw (o/saw f3)
+                 pulse1 (o/pulse f1 pulse-width)
+                 pulse2 (o/pulse f2 pulse-width)
+
+                 ;; Pan and mix
+                 sigs [(o/pan2 saw 0.0)
+                       (o/pan2 pulse1 (* -0.4 pan-spread))
+                       (o/pan2 pulse2 (* 0.4 pan-spread))]
+                 mixed (o/mix sigs)
+
+                 ;; Bandpass filtering (trumpet-like tone focus)
+                 brassy (o/bpf mixed bpf-freq bpf-q)
+
+                 ;; Distortion after BPF for harmonic "bite"
+                 driven (o/tanh (* brassy dist-gain))
+
+                 ;; Amp envelope
+                 amp-env (o/env-gen (o/adsr amp-attack amp-decay amp-sustain amp-release)
+                                    gate :action o/NO-ACTION)
+                 tail-env (o/env-gen (o/lin 0.001 1.0 1.0)
+                                     gate :action o/FREE) 
+                 voiced (* driven amp-env amp tail-env)
+
+                 ;; Reverb
+                 wet (o/free-verb voiced rev-mix rev-room)]
+             (o/out 0 wet))
+           {:mono? true}))
 
 #_
 (reset! midi-msg-fn&
@@ -183,15 +257,6 @@
 
 (:status node0)
 
-(defn ->mono [syn]
-  (let [mono& (atom nil)]
-    (fn [& args]
-      (when-let [s @mono&]
-        (when-not (-> s :status deref (= :destroyed))
-          (o/kill s))) 
-      (reset! mono&
-              (apply syn args)))))
-
 (def da-funk-mono0 (->mono da-funk0))
 
 #_
@@ -205,8 +270,10 @@
   (try
     (let [freq (midi->hz note-id)
           syn-kw @current-synth&
-          syn (:synth (@synths-ifaces& syn-kw))
-          node1 (syn :freq freq)]
+          syn-iface (@synths-ifaces& syn-kw)
+          {syn :synth :keys [arg-states]} syn-iface
+          _ (clojure.pprint/pprint (apply vector syn :freq freq (map->vec arg-states)))
+          node1 (apply syn :freq freq (map->vec arg-states))]
       (swap! notes& assoc note-id node1)
       node1)
     (catch Throwable e
@@ -238,6 +305,11 @@
         notes @notes&]
     (clojure.pprint/pprint [idx val arg-sym lo hi])        
     (clojure.pprint/pprint [synth arg-kw new-val])
+    (try
+      (swap! synths-ifaces& assoc-in
+             [current-synth :arg-states arg-kw] new-val)
+      (catch Throwable e
+        (clojure.pprint/pprint e)))
     (doseq [[_ n] notes]
       (try
         (when-not (destroyed? n)
@@ -247,10 +319,13 @@
     true))
 
 (defn control-change! [{:keys [command note status data1 data2 velocity] :as msg}]
-  (case data1
-    14 (set-synth! da-funk-mono)
-    15 (set-synth! (->mono fc-lead-x4))
-    (change-synth-arg! (- data1 20) data2)))
+  (try
+    (case data1
+      14 (set-synth! :da-funk)
+      15 (set-synth! :final-countdown)
+      (change-synth-arg! (- data1 20) data2))
+    (catch Throwable e
+      (clojure.pprint/pprint e))))
 
 (defn short-print-midi-msg [{:keys [command note status data1 data2 velocity] :as msg}]
   (format "cmd %s, status %s, note %d, vel %d, data [%d %d]\n"
@@ -521,9 +596,6 @@
 
 #_
 (play fc-lead-chatgpt0 400 :amp 2.0)
-
-(defn ugen-semitone-ratio [semi]
-  (o/pow 2.0 (o/mul-add semi (/ 1.0 12.0) 0)))
 
 (o/defsynth fc-lead-501
   [freq 440
