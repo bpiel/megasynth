@@ -75,6 +75,10 @@
 (defn ugen-semitone-ratio [semi]
   (o/pow 2.0 (o/mul-add semi (/ 1.0 12.0) 0)))
 
+(defn ugen-semitone-ratio-1 [semi]
+  (o/mul-add (o/pow 2.0 (o/mul-add semi (/ 1.0 12.0) 0.0))
+             1.0 -1.0))
+
 (swap! synths-ifaces&
         assoc :da-funk
         (mk-synth-iface
@@ -217,76 +221,53 @@
                  out (o/pan2 mixed pan)]
              (o/out 0 out))))
 
-(volca-keys-sim :lfo-rate 10.0)
+
+(o/defsynth around-the-world-lead
+  [freq 110
+   amp 1.2
+   detune 0.04
+   gate 1
+   cutoff 1000
+   res 0.6
+   env-amt 2000
+   attack 0.005
+   decay 0.2
+   sustain 0.0
+   release 0.1
+   lfo-rate 3.0
+   lfo-depth 0.0
+   dist-amt 3.0
+   pan 0.0]
+  (let [;; Pitch mod LFO (optional)
+        lfo (o/lf-tri lfo-rate)
+        pitch-lfo (* freq lfo lfo-depth)
+        base-freq (+ freq pitch-lfo)
+
+        ;; Detuned saws
+        f1 (* base-freq (ugen-semitone-ratio (- detune)))
+        f2 (* base-freq (ugen-semitone-ratio detune))
+        saws [(o/pan2 (o/saw f1) -0.3)
+              (o/pan2 (o/saw f2)  0.3)]
+        mixed (o/mix saws)
+
+        ;; Filter envelope
+        filt-env (o/env-gen (o/adsr attack decay sustain release) gate)
+        cutoff-mod (+ cutoff (* env-amt filt-env))
+        filtered (o/bpf mixed cutoff-mod res)
+
+        ;; Distortion
+        driven (o/tanh (* filtered dist-amt))
+
+        ;; Amp envelope
+        amp-env (o/env-gen (o/adsr attack decay sustain release) gate :action o/FREE)
+        final (* driven amp-env amp)]
+
+    (o/out 0 (o/pan2 final pan))))
+
+#_
+(play around-the-world-lead 1000)
 
 (o/stop)
-
-
-(o/defsynth volca-keys-sim
-  [freq 440
-   amp 0.8
-   detune 0.03
-
-   ;; Filter
-   cutoff 1200
-   res 0.7
-   env-amt 1000
-
-   ;; Envelopes
-   attack 0.01
-   decay 0.2
-   sustain 0.5
-   release 0.3
-
-   ;; Delay
-   delay-time 0.25
-   delay-fb 0.4
-   delay-mix 0.3
-
-   ;; LFO
-   lfo-rate 5.0              ;; Hz
-   lfo-depth 1.0             ;; global depth scaler
-   lfo->pitch 0.0            ;; amount in semitones
-   lfo->cutoff 0.0           ;; amount added to cutoff
-   lfo->amp 0.0              ;; amplitude modulation depth
-
-   pan 0.0
-   gate 1]
-  (let [ ;; LFO signal (triangle wave)
-        lfo (o/lf-tri lfo-rate)
-
-        ;; Apply LFO modulations
-        pitch-lfo (* lfo (ugen-semitone-ratio (* lfo->pitch lfo-depth)))
-        cutoff-lfo (* lfo lfo->cutoff lfo-depth)
-        amp-lfo (+ 1.0 (* lfo lfo->amp lfo-depth))  ;; centered around 1.0
-
-        ;; Detuned 3-voice oscillator
-        base-freq (* freq pitch-lfo)
-        ratios [(* -1.0 detune) 0 detune]
-        saws (mapv #(o/saw (* base-freq (ugen-semitone-ratio %))) ratios)
-        osc (apply + saws)
-
-        ;; Envelopes
-        amp-env (o/env-gen (o/adsr attack decay sustain release)
-                           gate :action o/FREE)
-        filt-env (o/env-gen (o/adsr attack decay sustain release) gate)
-        mod-cutoff (+ cutoff cutoff-lfo (* env-amt filt-env))
-
-        ;; Filtered signal
-        filtered (o/rlpf osc mod-cutoff res)
-
-        ;; Amplitude envelope w/ tremolo
-        voiced (* filtered amp-env amp amp-lfo)
-
-        ;; Delay
-        delayed (o/comb-n voiced delay-time delay-time delay-fb)
-        mixed (o/lin-lin delay-mix 0 1 voiced delayed)
-
-        ;; Output
-        out (o/pan2 mixed pan)]
-    (o/out 0 out)))
-
-
 
 (o/defsynth volca-keys0
   [freq 440
@@ -491,7 +472,7 @@
           syn-kw @current-synth&
           syn-iface (@synths-ifaces& syn-kw)
           {syn :synth :keys [arg-states]} syn-iface
-          _ (clojure.pprint/pprint (apply vector syn :freq freq (map->vec arg-states)))
+;;          _ (clojure.pprint/pprint (apply vector syn :freq freq (map->vec arg-states)))
           node1 (apply syn :freq freq (map->vec arg-states))]
       (swap! notes& assoc note-id node1)
       node1)
@@ -661,15 +642,6 @@
 
 #_  (+ (Math/pow 2.0 (* 1.0 (/ 1.0 12.0)))
      -1.0)
-
-(defn ugen-semitone-ratio [semi]
-  (o/pow 2.0 (o/mul-add semi (/ 1.0 12.0) 0)))
-
-(defn ugen-semitone-ratio-1 [semi]
-  (o/mul-add (o/pow 2.0 (o/mul-add semi (/ 1.0 12.0) 0.0))
-             1.0 -1.0))
-
-
 
 (o/defsynth fc-lead-342
   [freq 440
