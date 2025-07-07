@@ -124,7 +124,8 @@
       14 (set-synth! :da-funk)
       15 (set-synth! :final-countdown)
       16 (set-synth! :volca-keys0)
-      17 (set-synth! :atw-lead-1)      
+      17 (set-synth! :atw-lead-1)
+      18 (set-synth! :jump)            
       (change-synth-arg! (- data1 102) data2))
     (catch Throwable e
       (clojure.pprint/pprint e))))
