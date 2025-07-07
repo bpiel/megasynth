@@ -47,7 +47,10 @@
   (* 440 (Math/pow 2 (/ (- note 69) 12.0))))
 
 (defn set-synth! [s-kw]
-  (reset! current-synth& s-kw))
+  (reset! current-synth& s-kw)
+  (swap! com/synths-ifaces& assoc-in
+         [s-kw :arg-states]
+         (-> @com/synths-ifaces& s-kw :arg-init)))
 
 (defn scale-knob-value
   "Convert 0.0-1.0 knob value to actual parameter range"

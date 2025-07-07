@@ -31,6 +31,7 @@
               `(->mono (mk-synth ~args ~body))
               `(mk-synth ~args ~body))]
     `{:args '~args'
+      :arg-init ~arg-states
       :arg-states ~arg-states
       :synth ~syn}))
 
