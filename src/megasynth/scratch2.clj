@@ -1,5 +1,6 @@
 (ns megasynth.scratch2
-  (:require [megasynth.common :as com]
+  (:require [megasynth.bill-v1 :as b]
+            [megasynth.common :as com]
             [overtone.live :as o]))
 
 (defn play [synth dur-ms & args]
@@ -471,7 +472,7 @@
    gate 1]
   (let [ ;; Pitch envelope (optional)
         pitch-env (o/env-gen (o/adsr 0.0 0.06 0.0 0.01) gate)
-        pitch-mod (ugen-semitone-ratio (* pitch-env pitch-env-amt))
+        pitch-mod (com/ugen-semitone-ratio (* pitch-env pitch-env-amt))
         freq' (* freq pitch-mod)
         ;; Detuned saws
         f1 (* freq' (ugen-semitone-ratio (* -1.0 detune)))
@@ -739,4 +740,18 @@
 
 #_
 (o/stop)
+
+(defn play2 [dur-ms note-id]
+  (b/note-on! note-id)
+  (future
+    (Thread/sleep dur-ms)
+    (b/note-off! note-id)))
+
+(let [dur 100
+      notes [67 72 74 79 74]]
+  (dotimes [n 12]
+    (doseq [id notes]
+      (play2 dur id)
+      (Thread/sleep dur)))
+  (play2 dur (first notes)))
 

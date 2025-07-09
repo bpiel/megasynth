@@ -20,6 +20,7 @@
             amp-attack [0.0 0.0 0.1]  ;; instant
             amp-decay [0.1 10.0 12.0] ;; very long decay
             amp-sustain [0.0 0.0 0.1] ;; no sustain
+            ;; amp-sustain [0.0 1.0 1.0] ;; no sustain
             amp-release [0.01 0.08 0.3]
 
             pan-spread [0.0 0.4 1.0]]
@@ -44,7 +45,7 @@
                  amp-env (o/env-gen (o/adsr amp-attack amp-decay amp-sustain amp-release)
                                     gate :action o/NO-ACTION)
 
-                 tail-env (o/env-gen (o/lin 0.001 1.0 1.0)
+                 tail-env (o/env-gen (o/lin 0.001 1.0 5.0)
                                      gate :action o/FREE)
 
                  voiced (* filtered amp-env amp tail-env)
