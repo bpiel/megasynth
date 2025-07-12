@@ -755,3 +755,6 @@
       (Thread/sleep dur)))
   (play2 dur (first notes)))
 
+(count (o/active-synths))
+
+#_o/apply-by 

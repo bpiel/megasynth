@@ -126,7 +126,7 @@
       16 (set-synth! :volca-keys0)
       17 (set-synth! :atw-lead-1)
       18 (set-synth! :jump)
-      19 (set-synth! :derezzed)                  
+      19 (set-synth! :poly)                  
       (change-synth-arg! (- data1 102) data2))
     (catch Throwable e
       (clojure.pprint/pprint e))))
