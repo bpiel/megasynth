@@ -12,7 +12,8 @@
              dist-level [0.001 0.015 0.2]]
             (let [env (o/env-gen (o/adsr 0.3 0.7 0.5 0.3) (o/line:kr 1.0 0.0 dur) :action o/FREE)
                   level (+ (* freq 0.25)
-                           (o/env-gen (o/adsr 0.5 0.3 1 0.5) (o/line:kr 1.0 0.0 (/ dur 2)) :level-scale cutoff))
+                           (o/env-gen (o/adsr 0.5 0.3 1 0.5) (o/line:kr 1.0 0.0 (/ dur 2))
+                                      :level-scale cutoff))
                   osc (o/mix [(o/saw freq)
                               (o/saw (* freq 0.7491535384383409))])
                   sig (-> osc

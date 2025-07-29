@@ -1,10 +1,10 @@
 (ns megasynth.bill-v1
   (:require [megasynth.common :as com]
-            megasynth.synths.da-funk
             [overtone.live :as o]
             [overtone.midi :as midi])
   (:import [javax.sound.midi MidiDevice MidiDevice$Info MidiSystem
             Receiver Sequencer ShortMessage Synthesizer SysexMessage Transmitter]))
+
 
 (defn loading-tones [done?]
   (let [[f r s] (if done?
@@ -26,6 +26,22 @@
 
 ;; START LOADING 
 (loading-tones false)
+
+;; === START - SYNTHS ======
+
+(def synths-to-load '[megasynth.synths.da-funk
+                     megasynth.synths.jump
+                     megasynth.synths.poly
+                     megasynth.synths.derezzed
+                     megasynth.synths.volca-keys
+                     megasynth.synths.final-countdown
+                     #_megasynth.synths.time-to-pretend
+                     megasynth.synths.around-the-world])
+
+(doseq [s synths-to-load]
+  (require s))
+
+;; === END - SYNTHS ======
 
 ;; === START - STATE ======
 
