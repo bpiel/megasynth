@@ -38,6 +38,9 @@
 (defn ugen-semitone-ratio [semi]
   (o/pow 2.0 (o/mul-add semi (/ 1.0 12.0) 0)))
 
+(defn ugen-semitone-ratio-floor [semi]
+  (o/pow 2.0 (o/mul-add (o/floor semi) (/ 1.0 12.0) 0)))
+
 (defn ugen-semitone-ratio-1 [semi]
   (o/mul-add (o/pow 2.0 (o/mul-add semi (/ 1.0 12.0) 0.0))
              1.0 -1.0))

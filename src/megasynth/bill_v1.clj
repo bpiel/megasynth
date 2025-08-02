@@ -30,13 +30,15 @@
 ;; === START - SYNTHS ======
 
 (def synths-to-load '[megasynth.synths.da-funk
-                     megasynth.synths.jump
-                     megasynth.synths.poly
-                     megasynth.synths.derezzed
-                     megasynth.synths.volca-keys
-                     megasynth.synths.final-countdown
-                     #_megasynth.synths.time-to-pretend
-                     megasynth.synths.around-the-world])
+                      megasynth.synths.jump
+                      megasynth.synths.poly
+                      megasynth.synths.derezzed
+                      megasynth.synths.volca-keys
+                      megasynth.synths.final-countdown
+                      #_megasynth.synths.time-to-pretend
+                      megasynth.synths.around-the-world
+                      megasynth.synths.garson
+                      megasynth.synths.multiple])
 
 (doseq [s synths-to-load]
   (require s))
@@ -142,7 +144,9 @@
       16 (set-synth! :volca-keys0)
       17 (set-synth! :atw-lead-1)
       18 (set-synth! :jump)
-      19 (set-synth! :poly)                  
+      19 (set-synth! :poly)
+      20 (set-synth! :garson)
+      21 (set-synth! :multiple)      
       (change-synth-arg! (- data1 102) data2))
     (catch Throwable e
       (clojure.pprint/pprint e))))
