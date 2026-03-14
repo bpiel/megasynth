@@ -32,6 +32,7 @@
 (def synths-to-load '[megasynth.synths.da-funk
                       megasynth.synths.jump
                       megasynth.synths.poly
+                      megasynth.synths.prophet-rev2
                       megasynth.synths.derezzed
                       megasynth.synths.volca-keys
                       megasynth.synths.final-countdown
@@ -49,7 +50,11 @@
 
 (defonce midi-msg-fn& (atom identity))
 
+(defonce ctrl-midi-msg-fn& (atom identity))
+
 (defonce current-midi& (atom nil))
+
+(defonce current-ctrl-midi& (atom nil))
 
 (defonce current-synth& (atom nil)) ;; keyword
 
@@ -112,29 +117,34 @@
   true)
 
 (defn change-synth-arg! [idx val]
-  (let [current-synth @current-synth&
-        {:keys [synth args]} (@com/synths-ifaces& current-synth)
-        [arg-sym [lo _ hi]] (nth args idx)
-        arg-kw (-> arg-sym name keyword)
-        new-val (scale-knob-value (/ val 127.0)
-                                  lo
-                                  hi
-                                  :linear)
-        notes @notes&]
-    (clojure.pprint/pprint [idx val arg-sym new-val lo hi])        
-    #_(clojure.pprint/pprint [synth arg-kw new-val])
-    (try
-      (swap! com/synths-ifaces& assoc-in
-             [current-synth :arg-states arg-kw] new-val)
-      (catch Throwable e
-        (clojure.pprint/pprint e)))
-    (doseq [[_ n] notes]
+  (try
+    (let [current-synth @current-synth&
+          {:keys [synth args]} (@com/synths-ifaces& current-synth)
+          [arg-sym [lo _ hi]] (nth args idx)
+          arg-kw (-> arg-sym name keyword)
+          new-val (scale-knob-value (/ val 127.0)
+                                    lo
+                                    hi
+                                    :linear)
+          notes @notes&]
+      (clojure.pprint/pprint [idx val arg-sym new-val lo hi])        
+      #_(clojure.pprint/pprint [synth arg-kw new-val])
       (try
-        (when-not (destroyed? n)
-          (o/ctl n arg-kw new-val))
+        (swap! com/synths-ifaces& assoc-in
+               [current-synth :arg-states arg-kw] new-val)
         (catch Throwable e
-          (clojure.pprint/pprint [e synth arg-kw new-val]))))
-    true))
+          (clojure.pprint/pprint e)))
+      (doseq [[_ n] notes]
+        (try
+          (when-not (destroyed? n)
+            (o/ctl n arg-kw new-val))
+          (catch Throwable e
+            (clojure.pprint/pprint [e synth arg-kw new-val]))))
+      true)
+    (catch Throwable e
+      (clojure.pprint/pprint (.getMessage e))
+      (def csa-e e)
+      false)))
 
 (defn control-change! [{:keys [command note status data1 data2 velocity] :as msg}]
   (try
@@ -142,7 +152,8 @@
       14 (set-synth! :da-funk)
       15 (set-synth! :final-countdown)
       16 (set-synth! :volca-keys0)
-      17 (set-synth! :atw-lead-1)
+      17 (set-synth! :prophet-rev2)
+      #_(set-synth! :atw-lead-1)
       18 (set-synth! :jump)
       19 (set-synth! :poly)
       20 (set-synth! :garson)
@@ -165,19 +176,51 @@
     nil
     #_(clojure.pprint/pprint msg)))
 
+(def ctrl-pos& (atom (vec (repeat 12 0))))
+
+#_
+(let [idx 0
+      dir 1]
+  (swap! ctrl-pos& update idx (partial update-pos dir)))
+
+#_
+(update @ctrl-pos& 0 (partial update-pos 1))
+
+(def dir-mode& (atom -1))
+
+(defn update-pos [dir pos]
+  (try
+    (-> pos
+        (+ (* @dir-mode& dir))
+        (min 127)
+        (max 0))
+    (catch Throwable
+        pos)))
+
+(defn ctrl-midi-handler [{:keys [command data1 data2] :as msg}]
+  (try
+    #_(clojure.pprint/pprint msg)
+    (let [idx (- data1 10)
+          dir (if (< data2 65) 1 -1)
+          v (swap! ctrl-pos& update idx (partial update-pos dir))]
+      (clojure.pprint/pprint [(swap! ctrl-pos& update idx (partial update-pos dir)) msg])
+      (change-synth-arg! idx (nth v idx)))
+    (catch Throwable e
+      (clojure.pprint/pprint [:ctrl-midi-handler e]))))
+
 #_(midi-handler {:command :note-on :note 60})
 #_(midi-handler {:command :note-off :note 60})
 
-(defn mk-receiver []
+(defn mk-receiver [handler&]
   (proxy [Receiver] []
     (close [] nil)
     (send [msg timestamp] (cond (instance? ShortMessage msg )
-                                (@midi-msg-fn&
+                                (@handler&
                                  (assoc (midi/midi-msg msg timestamp)
                                         :device :DUMMY))
 
                                 (instance? SysexMessage msg)
-                                (@midi-msg-fn&
+                                (@handler&
                                  {:timestamp timestamp
                                   :data (.getData ^SysexMessage msg)
                                   :status (.getStatus ^SysexMessage msg)
@@ -185,19 +228,30 @@
                                   :device :DUMMY})))))
 
 (defn setup-midi-in []
-  (let [m-in (midi/midi-in "O")]
+  (let [m-in (midi/midi-in "O" #_Oxygen) 
+        ctrl-in (midi/midi-in "T" #_Teensy)]
     (if-not (nil? m-in)
       (let [_ (reset! current-midi& m-in)
-            rcvr (mk-receiver)
+            rcvr (mk-receiver midi-msg-fn&)
             route (midi/midi-route m-in
                                    {:receiver rcvr})]
         true)
-      (throw (Exception. "MIDI INPUT NOT FOUND")))))
+      (throw (Exception. "MIDI INPUT NOT FOUND")))
+    (if-not (nil? ctrl-in)
+      (let [_ (reset! current-ctrl-midi& ctrl-in)
+            rcvr (mk-receiver ctrl-midi-msg-fn&)
+            route (midi/midi-route ctrl-in
+                                   {:receiver rcvr})]
+        true)
+      (println "### CONTROL PANEL MIDI  NOT FOUND! <<<<<======"))))
+
+#_(clojure.pprint/pprint (midi/midi-devices))
 
 #_(setup-midi-in)
 
 (defn setup-all []
   (reset! midi-msg-fn& midi-handler)
+  (reset! ctrl-midi-msg-fn& #'ctrl-midi-handler)
   (reset! current-synth& :da-funk)
   (setup-midi-in))
 
@@ -226,6 +280,8 @@
       (set-synth! fc-lead-501-mono))
 
   (play fc-lead-x4 400)
+
+  (o/stop)
 
   (comment))
 
