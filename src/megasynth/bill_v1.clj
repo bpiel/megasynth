@@ -1,10 +1,22 @@
 (ns megasynth.bill-v1
   (:require [megasynth.common :as com]
             [overtone.live :as o]
-            [overtone.midi :as midi])
+            [overtone.midi :as midi]
+            [megasynth.queue-appregiator :as q-arp])
   (:import [javax.sound.midi MidiDevice MidiDevice$Info MidiSystem
             Receiver Sequencer ShortMessage Synthesizer SysexMessage Transmitter]))
 
+(def q-arp-cfg {:short-len 4 :long-len 8})
+
+(defonce arp-thread& (atom nil))
+
+#_(realized? @arp-thread&)
+
+(def arp-q& (atom {:on false
+                   :bpm 60
+                   :q-active []
+                   :cur-seq []
+                   :q []}))
 
 (defn loading-tones [done?]
   (let [[f r s] (if done?
@@ -116,6 +128,25 @@
         (clojure.pprint/pprint node0))))
   true)
 
+(defn route-note-to-arp! [note-id]
+  (let [{:keys [on q]} @arp-q&]
+    (if on
+      (let [q' (q-arp/push-note q-arp-cfg q note-id)
+            sq (q-arp/gen-seq q-arp-cfg q')]
+        (swap! arp-q& #(assoc %
+                              :cur-seq sq
+                              :q q'))
+        true)
+      false)))
+
+(defn route-note-on! [note-id]
+  (when (-> note-id route-note-to-arp! not)
+    (note-on! note-id)))
+
+(defn route-note-off! [note-id]
+  (when (-> note-id route-note-to-arp! not)
+    (note-off! note-id)))
+
 (defn change-synth-arg! [idx val]
   (try
     (let [current-synth @current-synth&
@@ -146,6 +177,13 @@
       (def csa-e e)
       false)))
 
+
+(defn toggle-queue-appregiator! []
+  (swap! arp-q& update :on not))
+
+(defn set-queue-appregiator-tempo! [bpm]
+  (swap! arp-q& assoc :bpm bpm))
+
 (defn control-change! [{:keys [command note status data1 data2 velocity] :as msg}]
   (try
     (case data1
@@ -157,7 +195,10 @@
       18 (set-synth! :jump)
       19 (set-synth! :poly)
       20 (set-synth! :garson)
-      21 (set-synth! :multiple)      
+      21 (set-synth! :multiple)
+      22 (toggle-queue-appregiator!)
+      ;; !!! switch to use modulator value
+      23 (set-queue-appregiator-tempo! data2) 
       (change-synth-arg! (- data1 102) data2))
     (catch Throwable e
       (clojure.pprint/pprint e))))
@@ -170,8 +211,8 @@
   #_(clojure.pprint/pprint msg)
   (println (short-print-midi-msg msg))
   (case command
-    :note-on (note-on! note)
-    :note-off (note-off! note)
+    :note-on (route-note-on! note)
+    :note-off (route-note-off! note)
     :control-change (control-change! msg)
     nil
     #_(clojure.pprint/pprint msg)))
@@ -197,6 +238,7 @@
     (catch Throwable
         pos)))
 
+;; ROTARY ENCODER KNOBS
 (defn ctrl-midi-handler [{:keys [command data1 data2] :as msg}]
   (try
     #_(clojure.pprint/pprint msg)
@@ -249,7 +291,40 @@
 
 #_(setup-midi-in)
 
+(defn get-next-arp-note [q-active cur-seq]
+  (let [[n0 :as q-active'] (if (empty? q-active)
+                             cur-seq
+                             q-active)]
+    [n0 (-> q-active' rest vec)]))
+
+(defn run-arp-step! [a&]
+  (let [{:keys [on bpm q-active cur-seq stop]} @a&]
+    (if on
+      (do
+        (let [[n q-active'] (get-next-arp-note q-active cur-seq)]
+          (when n
+            (note-on! n))
+          (swap! arp-q& assoc :q-active q-active'))
+        (long (/ (* 60 1000) bpm)))
+      100)))
+
+(defn setup-arp-thread! []
+  (let [at @arp-thread&]
+    (when (or (nil? at) (realized? at))
+      (reset! arp-thread&
+              (future (try (loop []
+                             (let [t (#'run-arp-step! arp-q&)]
+                               (if (neg? t)
+                                 :done
+                                 (do (println (str "setup-arp-thread!: sleep " t))
+                                     (Thread/sleep t)
+                                     (recur)))))
+                           (catch Throwable e
+                             (clojure.pprint/pprint e)
+                             [:ex e])))))))
+
 (defn setup-all []
+  (setup-arp-thread!)
   (reset! midi-msg-fn& midi-handler)
   (reset! ctrl-midi-msg-fn& #'ctrl-midi-handler)
   (reset! current-synth& :da-funk)
@@ -283,6 +358,26 @@
 
   (o/stop)
 
+  @arp-q&
+
+  (toggle-queue-appregiator!)
+
+  (route-note-on! 60)
+
+  (route-note-on! 62)
+
+  (route-note-on! 64)
+
+  (route-note-on! 68)
+
+  (route-note-on! 70)
+
+  (route-note-on! 74)
+
+  (route-note-on! 78)  
+
+  (set-queue-appregiator-tempo! 360)
+
   (comment))
 
 #_(set-synth! fc-lead-501-mono)
@@ -291,4 +386,3 @@
 
 
 #_(set-synth! :volca-keys0)
-

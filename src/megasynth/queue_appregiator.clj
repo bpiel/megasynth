@@ -1,7 +1,5 @@
 (ns megasynth.queue-appregiator)
 
-(def q& (atom []))
-
 (defn push-note [{:keys [long-len] :as cfg} q note]
   (let [n (count q)
         ;; Removal window is (long-len / 2) + 1
@@ -45,9 +43,3 @@
       (let [last-5 (vec (sort (take-last 5 q)))
             arpeggio-indices [0 1 2 3 4 3 2 1]]
         (vec (map #(nth last-5 %) arpeggio-indices))))))
-
-(defn push-note! [cfg note]
-  (swap! q& #(push-note cfg % note)))
-
-(defn gen-seq! [cfg]
-  (gen-seq cfg @q&))
