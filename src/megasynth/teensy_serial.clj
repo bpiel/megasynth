@@ -53,11 +53,31 @@
 (defonce !teensy-ready? (atom false))
 (defonce !ignore-encoders-until-ms (atom 0))
 
+(def knob-min 0)
+(def knob-max 100)
+
+(defonce !knob-values (atom [50 50 50 50]))
+
+(defonce !pending-display (atom #{}))
+(defonce !last-sent-values (atom {}))
+(defonce !flusher-thread (atom nil))
+
+(def display-flush-interval-ms 70)
+
+;; Encoder acceleration: short inter-event intervals get a larger step.
+;; At accel-threshold-ms or slower -> multiplier 1.
+;; At accel-threshold-ms / accel-max-multiplier or faster -> multiplier capped.
+(def accel-threshold-ms   300)
+(def accel-max-multiplier  4)
+
+(defonce !last-encoder-event-ms (atom [0 0 0 0]))
+
+(declare update-knob!)
+
 (defonce !encoder-handler
   (atom
    (fn [index delta]
-     ;; Replace this with your real synth/control dispatch.
-     (println :encoder index :delta delta))))
+     (update-knob! index delta))))
 
 (defonce !line-handler
   (atom
@@ -65,7 +85,7 @@
      ;; Non-encoder Teensy messages, as keywords: :ready (boot / READY?), :pong.
      (println :teensy-line msg))))
 
-(declare close-port! write-line!)
+(declare close-port! write-line! update-knob! flusher-loop!)
 
 ;; -----------------------------
 ;; Time helpers
@@ -180,6 +200,14 @@
       (.join t 1000)))
 
   (reset! !reader-thread nil)
+
+  (when-let [^Thread ft @!flusher-thread]
+    (when (.isAlive ft)
+      (.interrupt ft)
+      (.join ft 500)))
+  (reset! !flusher-thread nil)
+  (reset! !pending-display #{})
+
   (reset! !port nil)
   (reset! !teensy-ready? false)
   (reset! !ignore-encoders-until-ms 0)
@@ -245,7 +273,9 @@
 (defn- mark-ready! []
   (reset! !teensy-ready? true)
   (reset! !ignore-encoders-until-ms
-          (+ (now-ms) post-ready-quiet-ms)))
+          (+ (now-ms) post-ready-quiet-ms))
+  ;; Teensy display is blank after boot; force all knobs to re-send.
+  (reset! !last-sent-values {}))
 
 (defn- handle-complete-encoder-packet!
   [index delta-byte]
@@ -401,6 +431,11 @@
         (.start t)
         (reset! !reader-thread t)
 
+        (let [ft (Thread. flusher-loop! "megasynth-display-flusher")]
+          (.setDaemon ft true)
+          (.start ft)
+          (reset! !flusher-thread ft))
+
         ;; Ask Teensy to confirm readiness. If it has just rebooted,
         ;; it may also independently print READY.
         (try
@@ -442,6 +477,47 @@
         "\t" (safe-field value)
         "\t" amount)))
 
+(defn- accel-multiplier [index]
+  (let [now      (now-ms)
+        last     (get @!last-encoder-event-ms index)
+        interval (- now last)]
+    (swap! !last-encoder-event-ms assoc index now)
+    (if (zero? last)
+      1
+      (min accel-max-multiplier
+           (max 1 (quot accel-threshold-ms (max 1 interval)))))))
+
+(defn update-knob! [index delta]
+  (let [step (* delta (accel-multiplier index))]
+    (swap! !knob-values update index
+           (fn [v] (-> (+ v step)
+                       (max knob-min)
+                       (min knob-max))))
+    (swap! !pending-display conj index)))
+
+(defn- flush-pending-displays! []
+  (let [[pending _] (swap-vals! !pending-display (constantly #{}))]
+    (doseq [i pending]
+      (let [v      (get @!knob-values i)
+            last-v (get @!last-sent-values i ::unsent)]
+        (when (not= v last-v)
+          (try
+            (send-display! i (str "PARAMETER " i) (str v) (* v 10))
+            (swap! !last-sent-values assoc i v)
+            (catch Throwable e
+              (println :display-flush-error
+                       {:index i :message (.getMessage e)}))))))))
+
+(defn- flusher-loop! []
+  (try
+    (loop []
+      (when @!running?
+        (Thread/sleep display-flush-interval-ms)
+        (when @!running?
+          (flush-pending-displays!))
+        (recur)))
+    (catch InterruptedException _)))
+
 (defn clear-displays! []
   (write-line! "CLEAR"))
 
@@ -474,9 +550,13 @@
 
   (start-reader!)
 
-  ;; Turn a knob. Expected:
-  ;; :encoder 0 :delta 1
-  ;; :encoder 0 :delta -1
+  ;; Turn a knob. The display for that knob updates automatically.
+  ;; Check current tracked values:
+  @!knob-values
+
+  ;; Reset all knobs to midpoint and refresh displays:
+  (reset! !knob-values [50 50 50 50])
+  (doseq [i (range 4)] (send-display! i (str "K" i) "50" 500))
 
   (ready?)
 

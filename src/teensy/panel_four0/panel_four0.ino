@@ -38,10 +38,10 @@ struct DisplayState {
 
 EncoderState encoders[4] = {
   // bitA, bitB, lastState, invert
-  {0, 1, 0, false},  // Encoder 0: MCP PA0 / PA1
-  {2, 3, 0, false},  // Encoder 1: MCP PA2 / PA3
-  {4, 5, 0, false},  // Encoder 2: MCP PA4 / PA5
-  {6, 7, 0, false}   // Encoder 3: MCP PA6 / PA7
+  {0, 1, 0, true},  // Encoder 0: MCP PA0 / PA1
+  {2, 3, 0, true},  // Encoder 1: MCP PA2 / PA3
+  {4, 5, 0, true},  // Encoder 2: MCP PA4 / PA5
+  {6, 7, 0, true}   // Encoder 3: MCP PA6 / PA7
 };
 
 // Blank on boot. Clojure owns real display state.
