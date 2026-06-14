@@ -2,7 +2,7 @@
   (:require [megasynth.common :as com]
             [overtone.live :as o]
             [overtone.midi :as midi]
-            [megasynth.queue-appregiator :as q-arp])
+            [megasynth.simple-queue-arpegiator :as q-arp])
   (:import [javax.sound.midi MidiDevice MidiDevice$Info MidiSystem
             Receiver Sequencer ShortMessage Synthesizer SysexMessage Transmitter]))
 
@@ -48,6 +48,7 @@
                       megasynth.synths.derezzed
                       megasynth.synths.volca-keys
                       megasynth.synths.final-countdown
+                      megasynth.synths.alpha1                      
                       #_megasynth.synths.time-to-pretend
                       megasynth.synths.around-the-world
                       megasynth.synths.garson
@@ -128,15 +129,16 @@
         (clojure.pprint/pprint node0))))
   true)
 
-(defn route-note-to-arp! [note-id]
+(defn route-note-to-arp! [note-id & [skip?]]
   (let [{:keys [on q]} @arp-q&]
     (if on
-      (let [q' (q-arp/push-note q-arp-cfg q note-id)
-            sq (q-arp/gen-seq q-arp-cfg q')]
-        (swap! arp-q& #(assoc %
-                              :cur-seq sq
-                              :q q'))
-        true)
+      (do (when-not skip?
+            (let [q' (q-arp/push-note q-arp-cfg q note-id)
+                  sq (q-arp/gen-seq q-arp-cfg q')]
+              (swap! arp-q& #(assoc %
+                                    :cur-seq sq
+                                    :q q')))
+            true))
       false)))
 
 (defn route-note-on! [note-id]
@@ -144,7 +146,7 @@
     (note-on! note-id)))
 
 (defn route-note-off! [note-id]
-  (when (-> note-id route-note-to-arp! not)
+  (when (-> note-id (route-note-to-arp! true) not)
     (note-off! note-id)))
 
 (defn change-synth-arg! [idx val]
@@ -184,21 +186,29 @@
 (defn set-queue-appregiator-tempo! [bpm]
   (swap! arp-q& assoc :bpm bpm))
 
+#_(set-queue-appregiator-tempo! 60)
+
 (defn control-change! [{:keys [command note status data1 data2 velocity] :as msg}]
   (try
     (case data1
+      1 (set-queue-appregiator-tempo! (max 10 (* 4 data2)))
       14 (set-synth! :da-funk)
       15 (set-synth! :final-countdown)
       16 (set-synth! :volca-keys0)
       17 (set-synth! :prophet-rev2)
       #_(set-synth! :atw-lead-1)
       18 (set-synth! :jump)
-      19 (set-synth! :poly)
+      19 (set-synth! :alpha1)      
+;;      19 (set-synth! :poly)
       20 (set-synth! :garson)
-      21 (set-synth! :multiple)
-      22 (toggle-queue-appregiator!)
+      22 (when (= data2 1)
+           (o/stop)) #_(set-synth! :multiple)
+      23 (when (= data2 1)
+           (toggle-queue-appregiator!))
       ;; !!! switch to use modulator value
-      23 (set-queue-appregiator-tempo! data2) 
+      ;; 23 (set-queue-appregiator-tempo! data2)
+      ;;36 (o/stop)
+      ;;37 (toggle-queue-appregiator!)
       (change-synth-arg! (- data1 102) data2))
     (catch Throwable e
       (clojure.pprint/pprint e))))
@@ -208,12 +218,12 @@
           command status note velocity data1 data2))
 
 (defn midi-handler [{:keys [command note] :as msg}]
-  #_(clojure.pprint/pprint msg)
+  (clojure.pprint/pprint msg)
   (println (short-print-midi-msg msg))
   (case command
-    :note-on (route-note-on! note)
-    :note-off (route-note-off! note)
-    :control-change (control-change! msg)
+    :note-on (#'route-note-on! note)
+    :note-off (#'route-note-off! note)
+    :control-change (#'control-change! msg)
     nil
     #_(clojure.pprint/pprint msg)))
 
@@ -303,25 +313,38 @@
       (do
         (let [[n q-active'] (get-next-arp-note q-active cur-seq)]
           (when n
-            (note-on! n))
+            (future (println (str "ON " n))
+                    (note-on! n)
+                    (Thread/sleep (long (/ (/ (* 60 1000) bpm) 2)))
+                    (println (str "OFF " n))
+                    (note-off! n)))
           (swap! arp-q& assoc :q-active q-active'))
         (long (/ (* 60 1000) bpm)))
       100)))
 
+(defonce kill-arp-thread?& (atom false))
+#_(reset! kill-arp-thread?& true)
+#_(reset! kill-arp-thread?& false)
+
 (defn setup-arp-thread! []
-  (let [at @arp-thread&]
+  (let [at @arp-thread&
+        acc& (atom 0)]
     (when (or (nil? at) (realized? at))
       (reset! arp-thread&
               (future (try (loop []
                              (let [t (#'run-arp-step! arp-q&)]
-                               (if (neg? t)
+                               (if (or (neg? t) @kill-arp-thread?&)
                                  :done
-                                 (do (println (str "setup-arp-thread!: sleep " t))
+                                 (do (swap! acc& + t)
+                                     (when (> @acc& 5000)
+                                       (println (str "setup-arp-thread!: slept " @acc&))
+                                       (reset! acc& 0))
                                      (Thread/sleep t)
                                      (recur)))))
                            (catch Throwable e
                              (clojure.pprint/pprint e)
-                             [:ex e])))))))
+                             [:ex e])
+                           (finally (println "arp-thread stopped"))))))))
 
 (defn setup-all []
   (setup-arp-thread!)
@@ -336,7 +359,13 @@
 
 #_(setup-all)
 
+
+
 (comment
+
+  @arp-q&
+
+  (toggle-queue-appregiator!)
 
   (set-synth! da-funk-mono)
 

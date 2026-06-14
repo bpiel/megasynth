@@ -5,7 +5,8 @@
             :url "https://www.eclipse.org/legal/epl-2.0/"}
   
   :dependencies [[org.clojure/clojure "1.12.1"]
-                 [overtone/overtone "0.16.3331"]]
+                 [overtone/overtone "0.16.3331"]
+                 [com.fazecast/jSerialComm "2.11.0"]]
 
   :native-path "native"
   

@@ -1,4 +1,4 @@
-(ns megasynth.simple-queue-appregiator)
+(ns megasynth.simple-queue-arpegiator)
 
 (defn push-note [_cfg q note]
   (vec (take-last 5 (conj (or q []) note))))
@@ -14,9 +14,9 @@
   (if (empty? q)
     []
     (let [sorted (vec (sort q))
-          fwd (gen-seq* sorted)
-          bwd (-> sorted reverse gen-seq*)]
+          fwd (take 4 sorted) #_(gen-seq* sorted)
+          bwd (->> sorted reverse (take 4)) #_(-> sorted reverse gen-seq*)]
       (->> (concat fwd bwd)
-           cycle
-           (take 8)
+           #_cycle
+           #_(take 8)
            vec))))
